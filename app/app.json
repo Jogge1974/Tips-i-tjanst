@@ -1,0 +1,60 @@
+{
+  "expo": {
+    "name": "Tips(i)tjänst",
+    "slug": "tips-i-tjanst",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/logga_transparent.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#F5F5F5"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "se.liveidrott.tipsitjanst",
+      "buildNumber": "1",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "googleServicesFile": "./google-services.json",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1B5E20"
+      },
+      "package": "se.liveidrott.tipsitjanst",
+      "versionCode": 1,
+      "usesCleartextTraffic": true,
+      "newArchEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#1B5E20"
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/logga_transparent.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#F5F5F5"
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "09e9213a-9876-40ad-8a42-c249c5a35963"
+      }
+    },
+    "owner": "jogge74"
+  }
+}

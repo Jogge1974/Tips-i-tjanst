@@ -1,0 +1,1174 @@
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  ActivityIndicator,
+  RefreshControl,
+  TouchableOpacity,
+  Modal,
+  Image,
+} from 'react-native';
+import { api } from '../services/api';
+
+const API_BASE_URL = 'https://tipstjanst-api-bpdxhah7f9hxhpce.westeurope-01.azurewebsites.net/api/api';
+
+interface LiveEvent {
+  eventNumber: number;
+  description: string;
+  home: string;
+  away: string;
+  league: string;
+  sportEventStart: string;
+  sportEventStatus: string;
+  outcomes: { home: string; draw: string; away: string } | null;
+  odds: { home: string; draw: string; away: string };
+}
+
+interface LiveDraw {
+  drawNumber: number;
+  drawComment?: string;
+  drawState: string;
+  closeTime: string;
+  turnover: string;
+  distribution?: { winners: number; amount: string; name: string }[];
+  events: LiveEvent[];
+}
+
+interface SystemRow {
+  radNr: number;
+  m1: string; m2: string; m3: string; m4: string; m5: string;
+  m6: string; m7: string; m8: string; m9: string; m10: string;
+  m11: string; m12: string; m13: string;
+}
+
+function getResultSign(event: LiveEvent): string {
+  if (!event.outcomes) return 'X'; // Ej startat = 0-0 = kryss
+  const homeGoals = parseInt(event.outcomes.home) || 0;
+  const awayGoals = parseInt(event.outcomes.away) || 0;
+  if (homeGoals > awayGoals) return '1';
+  if (homeGoals < awayGoals) return '2';
+  return 'X';
+}
+
+function getScore(event: LiveEvent): string {
+  if (!event.outcomes) return '0-0';
+  return `${event.outcomes.home}-${event.outcomes.away}`;
+}
+
+function formatTime(isoString: string): string {
+  if (!isoString) return '';
+  const date = new Date(isoString);
+  const now = new Date();
+  const isToday = date.toDateString() === now.toDateString();
+  if (isToday) {
+    return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+  }
+  const days = ['sön', 'mån', 'tis', 'ons', 'tor', 'fre', 'lör'];
+  return days[date.getDay()];
+}
+
+function calculateCorrect(row: SystemRow, events: LiveEvent[]): number {
+  let correct = 0;
+  for (let i = 1; i <= 13; i++) {
+    const event = events[i - 1];
+    if (!event) continue;
+    const resultSign = getResultSign(event);
+    const rowSign = (row as any)[`m${i}`];
+    if (rowSign === resultSign) correct++;
+  }
+  return correct;
+}
+
+function getEventStatusColor(status: string): string {
+  if (status === 'Inte startat') return '#999';
+  if (status === 'Avslutad') return '#1B5E20';
+  return '#E65100'; // Pågående
+}
+
+export default function LiveScreen() {
+  const [draw, setDraw] = useState<LiveDraw | null>(null);
+  const [rows, setRows] = useState<SystemRow[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [headerExpanded, setHeaderExpanded] = useState(false);
+  const [activeTab, setActiveTab] = useState<'kupong' | 'rader'>('kupong');
+  const [changedEvents, setChangedEvents] = useState<Record<number, number>>({}); // eventNumber -> timestamp
+  const prevScoresRef = useRef<Record<number, string>>({});
+  const [analysisModal, setAnalysisModal] = useState<{
+    visible: boolean;
+    home: any;
+    away: any;
+    standings: any[];
+    league: string;
+    eventHome: string;
+    eventAway: string;
+    loading: boolean;
+  }>({ visible: false, home: null, away: null, standings: [], league: '', eventHome: '', eventAway: '', loading: false });
+
+  const [selectedRowIdx, setSelectedRowIdx] = useState(0);
+
+  const openAnalysis = async (event: LiveEvent) => {
+    setAnalysisModal({ visible: true, home: null, away: null, standings: [], league: event.league || '', eventHome: event.home, eventAway: event.away, loading: true });
+    try {
+      const resp = await fetch(`${API_BASE_URL}?action=getMatchAnalysis`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ league: event.league, home: event.home, away: event.away }),
+      });
+      const data = await resp.json();
+      setAnalysisModal(prev => ({ ...prev, home: data.home, away: data.away, standings: data.standings || [], loading: false }));
+    } catch {
+      setAnalysisModal(prev => ({ ...prev, loading: false }));
+    }
+  };
+
+  const loadData = useCallback(async () => {
+    try {
+      const drawData = await api.getLiveDraw();
+      
+      // Detect score changes
+      if (drawData?.events) {
+        const now = Date.now();
+        const newChanges: Record<number, number> = {};
+        for (const event of drawData.events) {
+          const score = event.outcomes ? `${event.outcomes.home}-${event.outcomes.away}` : null;
+          const prevScore = prevScoresRef.current[event.eventNumber];
+          if (score && prevScore !== undefined && prevScore !== score) {
+            newChanges[event.eventNumber] = now;
+          }
+          if (score) {
+            prevScoresRef.current[event.eventNumber] = score;
+          }
+        }
+        if (Object.keys(newChanges).length > 0) {
+          setChangedEvents(prev => ({ ...prev, ...newChanges }));
+        }
+      }
+
+      setDraw(drawData);
+
+      if (drawData?.drawNumber) {
+        const rowsData = await api.getSystemRows(drawData.drawNumber);
+        setRows(rowsData);
+      }
+    } catch (error: any) {
+      console.error('Live error:', error);
+    } finally {
+      setIsLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+      const interval = setInterval(loadData, 15000);
+      return () => clearInterval(interval);
+    }, [loadData])
+  );
+
+  // Rensa ändrade event-markeringar efter 60 sekunder
+  useEffect(() => {
+    const cleanup = setInterval(() => {
+      const now = Date.now();
+      setChangedEvents(prev => {
+        const filtered: Record<number, number> = {};
+        for (const [key, ts] of Object.entries(prev)) {
+          if (now - ts < 60000) filtered[Number(key)] = ts;
+        }
+        return Object.keys(filtered).length === Object.keys(prev).length ? prev : filtered;
+      });
+    }, 5000);
+    return () => clearInterval(cleanup);
+  }, []);
+
+  const onRefresh = () => {
+    setRefreshing(true);
+    loadData();
+  };
+
+  if (isLoading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#1B5E20" />
+      </View>
+    );
+  }
+
+  if (!draw || !draw.events || draw.events.length === 0) {
+    return (
+      <ScrollView
+        contentContainerStyle={styles.centeredContainer}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      >
+        <Text style={styles.noDataText}>Ingen aktiv stryktipsetomgång just nu.</Text>
+        <Text style={styles.noDataSubtext}>Dra ner för att uppdatera.</Text>
+      </ScrollView>
+    );
+  }
+
+  // Beräkna antal rätt per rad
+  const rowResults = rows.map((row) => ({
+    ...row,
+    correct: calculateCorrect(row, draw.events),
+  }));
+
+  // Sortera på antal rätt (högst först)
+  const sortedRows = [...rowResults].sort((a, b) => b.correct - a.correct);
+
+  // Räkna antal slutförda matcher (bara "Slut")
+  const finishedEvents = draw.events.filter(
+    (e) => e.sportEventStatus === 'Slut' || e.sportEventStatus === 'Avslutad'
+  ).length;
+
+  // Bästa rad
+  const bestRow = sortedRows[0];
+
+  // Sammanställning: hur många rader per antal rätt
+  const rightCount: Record<number, number> = {};
+  for (const r of rowResults) {
+    rightCount[r.correct] = (rightCount[r.correct] || 0) + 1;
+  }
+
+  // Beräkna vinst från distribution
+  const calculateWinnings = (): number => {
+    if (!draw?.distribution || !rows.length) return 0;
+    let total = 0;
+    for (const dist of draw.distribution) {
+      // Parse "13 rätt" -> 13
+      const match = dist.name.match(/(\d+)/);
+      if (!match) continue;
+      const numRight = parseInt(match[1]);
+      if (numRight < 10) continue;
+      // Räkna hur många av våra rader som har detta antal rätt
+      const count = rightCount[numRight] || 0;
+      if (count > 0) {
+        // Parse "2910526,00" -> 2910526
+        const amount = parseFloat(dist.amount.replace(',', '.'));
+        total += count * amount;
+      }
+    }
+    return Math.round(total);
+  };
+
+  const winnings = calculateWinnings();
+
+  // Parse distribution amounts for display
+  const getDistAmount = (numRight: number): string => {
+    if (!draw?.distribution) return '-';
+    const dist = draw.distribution.find(d => d.name.includes(`${numRight}`));
+    if (!dist) return '-';
+    const amount = parseFloat(dist.amount.replace(',', '.'));
+    return Math.round(amount).toLocaleString('sv-SE');
+  };
+
+  return (
+    <>
+    <ScrollView
+      style={styles.container}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+    >
+      {/* Kompakt header - klickbar för expand */}
+      {rows.length > 0 && (
+        <TouchableOpacity
+          style={styles.headerRow}
+          onPress={() => setHeaderExpanded(!headerExpanded)}
+          activeOpacity={0.8}
+        >
+          <View style={styles.headerCol}>
+            <Text style={styles.headerLabel}>Bästa rad</Text>
+            <Text style={styles.headerBig}>{bestRow ? `${bestRow.correct} rätt` : '-'}</Text>
+          </View>
+          <View style={[styles.headerCol, { alignItems: 'flex-end' }]}>
+            <Text style={styles.headerLabel}>Din vinst just nu</Text>
+            <Text style={styles.headerBig}>{winnings.toLocaleString('sv-SE')} kr</Text>
+          </View>
+          {headerExpanded && (
+            <View style={styles.headerExpanded}>
+              <Text style={styles.headerExpandedText}>
+                {draw.drawComment || `Omgång ${draw.drawNumber}`}
+              </Text>
+              <Text style={styles.headerExpandedText}>
+                {rows.length} rader · {finishedEvents}/13 avgjorda
+              </Text>
+            </View>
+          )}
+        </TouchableOpacity>
+      )}
+
+      {/* Tabb-väljare - visa bara om vi har rader */}
+      {rows.length > 0 ? (
+      <View style={styles.tabBar}>
+        <TouchableOpacity
+          style={[styles.tab, activeTab === 'kupong' && styles.tabActive]}
+          onPress={() => setActiveTab('kupong')}
+        >
+          <Text style={[styles.tabText, activeTab === 'kupong' && styles.tabTextActive]}>Min kupong</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tab, activeTab === 'rader' && styles.tabActive]}
+          onPress={() => setActiveTab('rader')}
+        >
+          <Text style={[styles.tabText, activeTab === 'rader' && styles.tabTextActive]}>Bästa enkelrad</Text>
+        </TouchableOpacity>
+      </View>
+      ) : (
+        <View style={styles.upcomingHeader}>
+          <Text style={styles.upcomingTitle}>{draw.drawComment || `Omgång ${draw.drawNumber}`}</Text>
+          <Text style={styles.upcomingSubtitle}>Veckans kupong</Text>
+        </View>
+      )}
+
+      {/* Tab: Min kupong */}
+      {(activeTab === 'kupong' || rows.length === 0) && (
+        <View style={styles.card}>
+          {draw.events.map((event, idx) => {
+            const sign = getResultSign(event);
+            const score = getScore(event);
+            const coveredSigns = new Set<string>();
+            for (const row of rows) {
+              coveredSigns.add((row as any)[`m${idx + 1}`]);
+            }
+            const hasCovered = rows.length > 0;
+            const weCoveredResult = hasCovered && coveredSigns.has(sign);
+            const isStarted = event.sportEventStatus !== 'Inte startat';
+            const isFinished = event.sportEventStatus === 'Slut' || event.sportEventStatus === 'Avslutad';
+
+            const hasRecentGoal = !!changedEvents[event.eventNumber];
+
+            return (
+              <View key={event.eventNumber} style={[
+                styles.eventRow,
+                isStarted && !isFinished && styles.eventRowLive,
+                isFinished && styles.eventRowFinished,
+              ]}>
+                <Text style={styles.eventNr}>{event.eventNumber}</Text>
+                <TouchableOpacity style={styles.eventInfo} onPress={() => openAnalysis(event)}>
+                  <Text style={styles.eventTeams} numberOfLines={1}>
+                    {event.home} - {event.away}
+                  </Text>
+                  {event.league ? <Text style={styles.eventLeague}>{event.league}</Text> : null}
+                </TouchableOpacity>
+
+                <View style={styles.eventResultArea}>
+                  {!isStarted ? (
+                    <Text style={styles.eventTimeText}>{formatTime(event.sportEventStart)}</Text>
+                  ) : (
+                    <View style={styles.scoreArea}>
+                      {hasRecentGoal && <Text style={styles.goalIcon}>⚽</Text>}
+                      {isFinished && !hasRecentGoal && <Text style={styles.ftPrefix}>FT</Text>}
+                      <View style={[
+                        styles.scoreBadge,
+                        weCoveredResult ? styles.scoreBadgeCovered : styles.scoreBadgeNotCovered,
+                      ]}>
+                        <Text style={[styles.scoreBadgeText, weCoveredResult ? styles.scoreBadgeTextCovered : styles.scoreBadgeTextNotCovered]}>{score}</Text>
+                      </View>
+                    </View>
+                  )}
+                </View>
+
+                {hasCovered && (
+                  <View style={styles.signsContainer}>
+                    {['1', 'X', '2'].map(s => {
+                      const isCovered = coveredSigns.has(s);
+                      const isCurrent = s === sign;
+                      let borderColor = 'transparent';
+                      if (isCurrent && isStarted) {
+                        borderColor = isCovered ? '#1B5E20' : '#C62828';
+                      }
+                      return (
+                        <View
+                          key={s}
+                          style={[
+                            styles.signBox,
+                            isCovered ? styles.signBoxCovered : styles.signBoxUncovered,
+                            isCurrent && isStarted && { borderWidth: 2.5, borderColor },
+                          ]}
+                        >
+                          <Text style={[
+                            styles.signBoxText,
+                            isCovered ? styles.signBoxTextCovered : styles.signBoxTextUncovered,
+                          ]}>{s}</Text>
+                        </View>
+                      );
+                    })}
+                  </View>
+                )}
+                {!hasCovered && (
+                  <View style={styles.signsContainer}>
+                    {['1', 'X', '2'].map(s => (
+                      <View key={s} style={[styles.signBox, styles.signBoxNeutral]}>
+                        <Text style={[styles.signBoxText, styles.signBoxTextNeutral]}>{s}</Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+              </View>
+            );
+          })}
+        </View>
+      )}
+
+      {/* Tab: Bästa enkelrad */}
+      {activeTab === 'rader' && sortedRows.length > 0 && (
+        <View style={styles.card}>
+          <View style={styles.enkelradContainer}>
+            {/* Fast vänsterdel: matchinfo + resultat */}
+            <View style={styles.enkelradFixed}>
+              {draw.events.map((event, idx) => {
+                const sign = getResultSign(event);
+                const score = getScore(event);
+                const isStarted = event.sportEventStatus !== 'Inte startat';
+                const isFinished = event.sportEventStatus === 'Slut' || event.sportEventStatus === 'Avslutad';
+                const hasRecentGoal = !!changedEvents[event.eventNumber];
+
+                return (
+                  <View key={event.eventNumber} style={[
+                    styles.enkelradMatchRow,
+                    isStarted && !isFinished && styles.eventRowLive,
+                    isFinished && styles.eventRowFinished,
+                  ]}>
+                    <Text style={styles.eventNr}>{event.eventNumber}</Text>
+                    <TouchableOpacity style={styles.enkelradMatchInfo} onPress={() => openAnalysis(event)}>
+                      <Text style={styles.eventTeams} numberOfLines={1}>
+                        {event.home} - {event.away}
+                      </Text>
+                    </TouchableOpacity>
+                    <View style={styles.enkelradResultArea}>
+                      {!isStarted ? (
+                        <Text style={styles.eventTimeText}>{formatTime(event.sportEventStart)}</Text>
+                      ) : (
+                        <View style={styles.scoreArea}>
+                          {hasRecentGoal && <Text style={styles.goalIcon}>⚽</Text>}
+                          {isFinished && !hasRecentGoal && <Text style={styles.ftPrefix}>FT</Text>}
+                          <View style={[
+                            styles.scoreBadge,
+                            styles.scoreBadgeCovered,
+                          ]}>
+                            <Text style={[styles.scoreBadgeText, styles.scoreBadgeTextCovered]}>{score}</Text>
+                          </View>
+                        </View>
+                      )}
+                    </View>
+                  </View>
+                );
+              })}
+              {/* Footer row for "rätt" label */}
+              <View style={styles.enkelradFooterRow}>
+                <Text style={styles.enkelradFooterLabel}>Rätt</Text>
+              </View>
+            </View>
+
+            {/* Scrollbar högerdel: enkelradskolumner */}
+            <ScrollView horizontal showsHorizontalScrollIndicator={true} style={styles.enkelradScrollArea}>
+              <View style={styles.enkelradColumns}>
+                {sortedRows.slice(0, 20).map((row, colIdx) => {
+                  const isEvenCol = colIdx % 2 === 0;
+                  return (
+                    <View key={row.radNr} style={[styles.enkelradCol, isEvenCol && styles.enkelradColEven]}>
+                      {draw.events.map((event, idx) => {
+                        const sign = getResultSign(event);
+                        const rowSign = (row as any)[`m${idx + 1}`];
+                        const isCorrect = rowSign === sign;
+                        return (
+                          <View
+                            key={event.eventNumber}
+                            style={[
+                              styles.enkelBox,
+                              isCorrect ? styles.enkelBoxCorrect : styles.enkelBoxWrong,
+                            ]}
+                          >
+                            <Text style={[
+                              styles.enkelBoxText,
+                              isCorrect ? styles.enkelBoxTextCorrect : styles.enkelBoxTextWrong,
+                            ]}>{rowSign}</Text>
+                          </View>
+                        );
+                      })}
+                      <View style={styles.enkelColFooter}>
+                        <Text style={styles.enkelColFooterText}>{row.correct}</Text>
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      )}
+
+      {/* Rättningstabellen */}
+      {rows.length > 0 && (
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Antal rätt / rader</Text>
+          {[13, 12, 11, 10].map((n) => (
+            <View key={n} style={styles.rightRow}>
+              <Text style={styles.rightLabel}>{n} rätt</Text>
+              <Text style={styles.rightAmount}>{getDistAmount(n)} kr</Text>
+              <Text style={styles.rightValue}>{rightCount[n] || 0} st</Text>
+            </View>
+          ))}
+        </View>
+      )}
+    </ScrollView>
+
+      {/* Matchanalys-modal */}
+      <Modal visible={analysisModal.visible} transparent animationType="slide">
+        <View style={styles.analysisOverlay}>
+          <ScrollView style={styles.analysisContent} contentContainerStyle={{ paddingBottom: 20 }}>
+            <Text style={styles.analysisTitle}>
+              {analysisModal.eventHome} vs {analysisModal.eventAway}
+            </Text>
+            <Text style={styles.analysisLeague}>{analysisModal.league}</Text>
+
+            {analysisModal.loading ? (
+              <ActivityIndicator color="#1B5E20" style={{ marginVertical: 24 }} />
+            ) : (
+              <>
+                <View style={styles.analysisTeams}>
+                  {[analysisModal.home, analysisModal.away].map((team, i) => (
+                    team ? (
+                      <View key={i} style={styles.analysisTeamCard}>
+                        {team.logo && <Image source={{ uri: team.logo }} style={styles.teamLogo} />}
+                        <View style={styles.analysisTeamInfo}>
+                          <View style={styles.analysisPositionRow}>
+                            <Text style={styles.analysisPosition}>#{team.position}</Text>
+                            <Text style={styles.analysisTeamName}>{team.name}</Text>
+                          </View>
+                          {team.form && (
+                            <View style={styles.formRow}>
+                              {team.form.map((m: any, fi: number) => (
+                                <View key={fi} style={[
+                                  styles.formBadge,
+                                  m.result === 'V' && styles.formWin,
+                                  m.result === 'O' && styles.formDraw,
+                                  m.result === 'F' && styles.formLoss,
+                                ]}>
+                                  <Text style={styles.formBadgeText}>{m.result}</Text>
+                                </View>
+                              ))}
+                            </View>
+                          )}
+                        </View>
+                      </View>
+                    ) : (
+                      <View key={i} style={styles.analysisTeamCard}>
+                        <Text style={styles.analysisNoData}>Tabelldata saknas</Text>
+                      </View>
+                    )
+                  ))}
+                </View>
+
+                {analysisModal.standings.length > 0 && (
+                  <View style={styles.standingsTable}>
+                    <View style={styles.standingsHeader}>
+                      <Text style={[styles.standingsCell, styles.standingsPosCol, styles.standingsHeaderText]}>#</Text>
+                      <Text style={[styles.standingsCell, styles.standingsTeamCol, styles.standingsHeaderText]}>Lag</Text>
+                      <Text style={[styles.standingsCell, styles.standingsNumCol, styles.standingsHeaderText]}>Sp</Text>
+                      <Text style={[styles.standingsCell, styles.standingsNumCol, styles.standingsHeaderText]}>V</Text>
+                      <Text style={[styles.standingsCell, styles.standingsNumCol, styles.standingsHeaderText]}>O</Text>
+                      <Text style={[styles.standingsCell, styles.standingsNumCol, styles.standingsHeaderText]}>F</Text>
+                      <Text style={[styles.standingsCell, styles.standingsGoalCol, styles.standingsHeaderText]}>Mål</Text>
+                      <Text style={[styles.standingsCell, styles.standingsNumCol, styles.standingsHeaderText]}>Po</Text>
+                    </View>
+                    {analysisModal.standings.map((t: any, idx: number) => {
+                      const isHighlighted = t.name === analysisModal.home?.name || t.name === analysisModal.away?.name;
+                      return (
+                        <View key={idx} style={[styles.standingsRow, isHighlighted && styles.standingsHighlight]}>
+                          <Text style={[styles.standingsCell, styles.standingsPosCol, isHighlighted && styles.standingsHighlightText]}>{t.position}</Text>
+                          <Text style={[styles.standingsCell, styles.standingsTeamCol, isHighlighted && styles.standingsHighlightText]} numberOfLines={1}>{t.name}</Text>
+                          <Text style={[styles.standingsCell, styles.standingsNumCol]}>{t.played}</Text>
+                          <Text style={[styles.standingsCell, styles.standingsNumCol]}>{t.wins}</Text>
+                          <Text style={[styles.standingsCell, styles.standingsNumCol]}>{t.draws}</Text>
+                          <Text style={[styles.standingsCell, styles.standingsNumCol]}>{t.losses}</Text>
+                          <Text style={[styles.standingsCell, styles.standingsGoalCol]}>{t.goalsFor}-{t.goalsAgainst}</Text>
+                          <Text style={[styles.standingsCell, styles.standingsNumCol, { fontWeight: '700' }]}>{t.points}</Text>
+                        </View>
+                      );
+                    })}
+                  </View>
+                )}
+              </>
+            )}
+
+            <TouchableOpacity
+              style={styles.closeAnalysisBtn}
+              onPress={() => setAnalysisModal(prev => ({ ...prev, visible: false }))}
+            >
+              <Text style={styles.closeAnalysisBtnText}>Stäng</Text>
+            </TouchableOpacity>
+          </ScrollView>
+        </View>
+      </Modal>
+    </>
+  );
+}
+
+function getSignColor(sign: string | null): string {
+  switch (sign) {
+    case '1': return '#1B5E20';
+    case 'X': return '#E65100';
+    case '2': return '#1565C0';
+    default: return '#999';
+  }
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#F5F5F5',
+    padding: 16,
+  },
+  centeredContainer: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+    backgroundColor: '#F5F5F5',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F5F5F5',
+  },
+  noDataText: {
+    fontSize: 16,
+    color: '#666',
+    textAlign: 'center',
+  },
+  noDataSubtext: {
+    fontSize: 13,
+    color: '#999',
+    marginTop: 8,
+  },
+  upcomingHeader: {
+    marginBottom: 12,
+    paddingHorizontal: 4,
+  },
+  upcomingTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1B5E20',
+  },
+  upcomingSubtitle: {
+    fontSize: 13,
+    color: '#666',
+    marginTop: 2,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  headerRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 12,
+    backgroundColor: '#1B5E20',
+    borderRadius: 10,
+    padding: 14,
+  },
+  headerCol: {
+    flexShrink: 1,
+  },
+  headerLabel: {
+    fontSize: 11,
+    color: '#A5D6A7',
+  },
+  headerBig: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  headerSmall: {
+    fontSize: 12,
+    color: '#C8E6C9',
+  },
+  headerExpanded: {
+    width: '100%',
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.2)',
+    marginTop: 10,
+    paddingTop: 8,
+  },
+  headerExpandedText: {
+    fontSize: 12,
+    color: '#C8E6C9',
+  },
+  card: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  cardTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#333',
+    marginBottom: 12,
+  },
+  eventRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+    borderRadius: 6,
+  },
+  eventRowLive: {
+    backgroundColor: '#E8F5E9',
+  },
+  eventRowFinished: {
+    backgroundColor: '#FFFDE7',
+  },
+  eventNr: {
+    width: 20,
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#999',
+  },
+  eventInfo: {
+    flex: 1,
+    marginRight: 8,
+  },
+  eventTeams: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#222',
+  },
+  eventLeague: {
+    fontSize: 11,
+    color: '#999',
+  },
+  eventResultArea: {
+    width: 60,
+    alignItems: 'center',
+    marginRight: 8,
+  },
+  eventTimeText: {
+    fontSize: 12,
+    color: '#666',
+    fontWeight: '500',
+  },
+  scoreArea: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  goalIcon: {
+    fontSize: 12,
+  },
+  ftPrefix: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#666',
+  },
+  scoreBadge: {
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 8,
+    borderWidth: 1.5,
+  },
+  scoreBadgeCovered: {
+    backgroundColor: '#E8F5E9',
+    borderColor: '#2E7D32',
+  },
+  scoreBadgeNotCovered: {
+    backgroundColor: '#FFEBEE',
+    borderColor: '#C62828',
+  },
+  scoreBadgeText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  scoreBadgeTextCovered: {
+    color: '#1B5E20',
+  },
+  scoreBadgeTextNotCovered: {
+    color: '#C62828',
+  },
+  signsContainer: {
+    flexDirection: 'row',
+    gap: 4,
+  },
+  signBox: {
+    width: 24,
+    height: 24,
+    borderRadius: 4,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  signBoxCovered: {
+    backgroundColor: '#C8E6C9',
+  },
+  signBoxUncovered: {
+    backgroundColor: '#e0e0e0',
+  },
+  signBoxNeutral: {
+    backgroundColor: '#f5f5f5',
+    borderWidth: 1,
+    borderColor: '#ddd',
+  },
+  signBoxText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  signBoxTextCovered: {
+    color: '#1B5E20',
+  },
+  signBoxTextUncovered: {
+    color: '#999',
+  },
+  signBoxTextNeutral: {
+    color: '#666',
+  },
+  rightRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f5f5f5',
+  },
+  rightLabel: {
+    fontSize: 14,
+    color: '#333',
+    fontWeight: '600',
+    width: 70,
+  },
+  rightAmount: {
+    fontSize: 13,
+    color: '#1B5E20',
+    flex: 1,
+    textAlign: 'center',
+  },
+  rightValue: {
+    fontSize: 14,
+    color: '#666',
+    width: 50,
+    textAlign: 'right',
+  },
+  tabBar: {
+    flexDirection: 'row',
+    marginBottom: 12,
+    backgroundColor: '#e0e0e0',
+    borderRadius: 8,
+    padding: 3,
+  },
+  tab: {
+    flex: 1,
+    paddingVertical: 8,
+    alignItems: 'center',
+    borderRadius: 6,
+  },
+  tabActive: {
+    backgroundColor: '#fff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  tabText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#666',
+  },
+  tabTextActive: {
+    color: '#1B5E20',
+  },
+  enkelradHeader: {
+    marginBottom: 8,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  enkelradHeaderText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1B5E20',
+  },
+  enkelradContainer: {
+    flexDirection: 'row',
+  },
+  enkelradFixed: {
+    flexShrink: 0,
+    width: '62%',
+  },
+  enkelradMatchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: 40,
+    borderRadius: 4,
+    paddingHorizontal: 2,
+  },
+  enkelradMatchInfo: {
+    flex: 1,
+    marginRight: 4,
+  },
+  enkelradResultArea: {
+    width: 48,
+    alignItems: 'center',
+  },
+  enkelradFooterRow: {
+    height: 28,
+    justifyContent: 'center',
+    alignItems: 'flex-end',
+    paddingRight: 4,
+  },
+  enkelradFooterLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#666',
+  },
+  enkelradScrollArea: {
+    flex: 1,
+  },
+  enkelradColumns: {
+    flexDirection: 'row',
+  },
+  enkelradCol: {
+    alignItems: 'center',
+    paddingHorizontal: 5,
+    paddingVertical: 0,
+    borderRadius: 6,
+  },
+  enkelradColEven: {
+    backgroundColor: '#E8F5E9',
+  },
+  enkelBox: {
+    width: 28,
+    height: 28,
+    marginVertical: 6,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  enkelBoxCorrect: {
+    backgroundColor: '#1B5E20',
+  },
+  enkelBoxWrong: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#ddd',
+  },
+  enkelBoxText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  enkelBoxTextCorrect: {
+    color: '#fff',
+  },
+  enkelBoxTextWrong: {
+    color: '#999',
+  },
+  enkelColFooter: {
+    height: 34,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderTopWidth: 1,
+    borderTopColor: '#ddd',
+    width: '100%',
+    marginTop: 4,
+  },
+  enkelColFooterText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#1B5E20',
+  },
+  enkelradSign: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 8,
+  },
+  enkelradSignCorrect: {
+    backgroundColor: '#E8F5E9',
+    borderWidth: 1.5,
+    borderColor: '#2E7D32',
+  },
+  enkelradSignWrong: {
+    backgroundColor: '#FFEBEE',
+    borderWidth: 1.5,
+    borderColor: '#C62828',
+  },
+  enkelradSignText: {
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  enkelradSignTextCorrect: {
+    color: '#1B5E20',
+  },
+  enkelradSignTextWrong: {
+    color: '#C62828',
+  },
+  analysisOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  analysisContent: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 24,
+    width: '100%',
+    maxWidth: 380,
+    maxHeight: '90%',
+  },
+  analysisTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#222',
+    textAlign: 'center',
+  },
+  analysisLeague: {
+    fontSize: 12,
+    color: '#999',
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  analysisTeams: {
+    gap: 12,
+    marginBottom: 20,
+  },
+  analysisTeamCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F5F5F5',
+    borderRadius: 10,
+    padding: 12,
+  },
+  teamLogo: {
+    width: 36,
+    height: 36,
+    borderRadius: 4,
+    marginRight: 12,
+  },
+  analysisTeamInfo: {
+    flex: 1,
+  },
+  analysisPositionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  analysisPosition: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#1B5E20',
+  },
+  analysisTeamName: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#333',
+  },
+  formRow: {
+    flexDirection: 'row',
+    gap: 4,
+    marginTop: 6,
+  },
+  formBadge: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  formWin: {
+    backgroundColor: '#1B5E20',
+  },
+  formDraw: {
+    backgroundColor: '#F57F17',
+  },
+  formLoss: {
+    backgroundColor: '#C62828',
+  },
+  formBadgeText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  analysisNoData: {
+    fontSize: 13,
+    color: '#999',
+    fontStyle: 'italic',
+  },
+  standingsTable: {
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    borderRadius: 6,
+    overflow: 'hidden',
+  },
+  standingsHeader: {
+    flexDirection: 'row',
+    backgroundColor: '#1B5E20',
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+  },
+  standingsHeaderText: {
+    color: '#fff',
+    fontWeight: '700',
+  },
+  standingsRow: {
+    flexDirection: 'row',
+    paddingVertical: 5,
+    paddingHorizontal: 4,
+    borderBottomWidth: 0.5,
+    borderBottomColor: '#e0e0e0',
+  },
+  standingsHighlight: {
+    backgroundColor: '#C8E6C9',
+  },
+  standingsHighlightText: {
+    fontWeight: '700',
+  },
+  standingsCell: {
+    fontSize: 11,
+    color: '#333',
+  },
+  standingsPosCol: {
+    width: 20,
+    textAlign: 'center',
+  },
+  standingsTeamCol: {
+    flex: 1,
+    paddingHorizontal: 4,
+  },
+  standingsNumCol: {
+    width: 22,
+    textAlign: 'center',
+  },
+  standingsGoalCol: {
+    width: 38,
+    textAlign: 'center',
+  },
+  closeAnalysisBtn: {
+    marginTop: 14,
+    backgroundColor: '#e0e0e0',
+    borderRadius: 8,
+    padding: 12,
+    alignItems: 'center',
+  },
+  closeAnalysisBtnText: {
+    color: '#333',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+});
