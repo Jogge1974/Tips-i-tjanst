@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# iOS
+*.ipa
+ios/
+
+# Android
+*.apk
+*.aab
+android/
+
+# Environment
+.env
+.env.*
+local.settings.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# VS Code / Visual Studio
+.vs/
+.vscode/
+
+# Images folder
+bilder/
+
+# Documents
+*.txt
+*.pdf
+
+# Firebase service account
+*.json.bak
+tipsitjanst-firebase-adminsdk-*.json
