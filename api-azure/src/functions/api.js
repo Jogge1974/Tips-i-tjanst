@@ -864,6 +864,7 @@ async function checkAndSendNotifications(context) {
     // Swedish time = UTC+2 (summer)
     const sweHour = now.getUTCHours() + 2;
     const sweDay = new Date(now.getTime() + 2 * 60 * 60 * 1000).getDay(); // 0=Sun, 1=Mon, ..., 4=Thu
+    const sweMinutes = now.getUTCMinutes();
 
     // Get current spelomgang
     const [ekoRows] = await db.query('SELECT spelomgang, drawNumber FROM TIT_ekonomi ORDER BY spelomgang DESC LIMIT 1');
@@ -875,6 +876,7 @@ async function checkAndSendNotifications(context) {
     const isTue = sweDay === 2;
     const isWed = sweDay === 3;
     const isThu = sweDay === 4;
+    const isFri = sweDay === 5;
     const inNotis1Window = (isTue && sweHour >= 8) || isWed || (isThu && sweHour < 12);
 
     if (inNotis1Window) {
@@ -969,6 +971,70 @@ async function checkAndSendNotifications(context) {
                 await db.query(
                     'INSERT IGNORE INTO TIT_push_log (userId, notisType, spelomgang) VALUES (?, ?, ?)',
                     [row.userId, 'spelstopp_1145', spelomgang]
+                );
+            }
+        }
+    }
+
+    // === NOTIS 3b: Garderingsspelet öppet (torsdag kl 12:15) ===
+    if (isThu && sweHour === 12 && sweMinutes >= 13 && sweMinutes <= 17) {
+        const [alreadySent] = await db.query(
+            "SELECT id FROM TIT_push_log WHERE notisType = 'gardering_oppet' AND spelomgang = ? LIMIT 1",
+            [spelomgang]
+        );
+        if (!alreadySent.length) {
+            // Send to all users with notis_ny_kupong enabled
+            const [tokenRows] = await db.query(
+                'SELECT DISTINCT userId, pushToken FROM TIT_push_tokens WHERE notis_ny_kupong = 1'
+            );
+            const userTokens = {};
+            for (const row of tokenRows) {
+                if (!userTokens[row.userId]) userTokens[row.userId] = [];
+                userTokens[row.userId].push(row.pushToken);
+            }
+            for (const [userId, tokens] of Object.entries(userTokens)) {
+                await sendExpoPush(
+                    tokens,
+                    'Garderingsspelet öppet',
+                    'Garderingar kan, med garanti, lämnas fram t.o.m. fredag kl 12. Ännu lite längre utan garanti.'
+                );
+                await db.query(
+                    'INSERT IGNORE INTO TIT_push_log (userId, notisType, spelomgang) VALUES (?, ?, ?)',
+                    [userId, 'gardering_oppet', spelomgang]
+                );
+            }
+        }
+    }
+
+    // === NOTIS 3c: Garderingsspelet stänger snart (fredag kl 11:50) ===
+    if (isFri && sweHour === 11 && sweMinutes >= 48 && sweMinutes <= 52) {
+        const [alreadySent] = await db.query(
+            "SELECT id FROM TIT_push_log WHERE notisType = 'gardering_spelstopp' AND spelomgang = ? LIMIT 1",
+            [spelomgang]
+        );
+        if (!alreadySent.length) {
+            // Find users who have NOT saved garderingar for this round
+            const [allUsers] = await db.query(
+                `SELECT DISTINCT pt.userId
+                 FROM TIT_push_tokens pt
+                 LEFT JOIN TIT_garderingar g ON g.id = pt.userId AND g.omgang = ?
+                 WHERE pt.notis_spelstopp = 1 AND g.id IS NULL`,
+                [spelomgang]
+            );
+            for (const row of allUsers) {
+                const [tokens] = await db.query(
+                    'SELECT pushToken FROM TIT_push_tokens WHERE userId = ? AND notis_spelstopp = 1',
+                    [row.userId]
+                );
+                if (!tokens.length) continue;
+                await sendExpoPush(
+                    tokens.map(t => t.pushToken),
+                    'Garderingsspelet stänger snart',
+                    'Garderingsspelet är med garanti öppet till kl 12:00. Det kan vara öppet längre om du vill vänta och chansa.'
+                );
+                await db.query(
+                    'INSERT IGNORE INTO TIT_push_log (userId, notisType, spelomgang) VALUES (?, ?, ?)',
+                    [row.userId, 'gardering_spelstopp', spelomgang]
                 );
             }
         }

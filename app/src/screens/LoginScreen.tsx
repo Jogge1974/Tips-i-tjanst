@@ -95,7 +95,6 @@ export default function LoginScreen() {
             style={styles.logo}
             resizeMode="contain"
           />
-          <Text style={styles.title}>Tips(i)tjänst</Text>
         </View>
 
         <View style={styles.formContainer}>
