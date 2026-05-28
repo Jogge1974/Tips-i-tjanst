@@ -6,10 +6,15 @@ import MinSidaScreen from '../screens/MinSidaScreen';
 import TipsAllsvenskanScreen from '../screens/TipsAllsvenskanScreen';
 import LiveScreen from '../screens/LiveScreen';
 import SettingsScreen from '../screens/SettingsScreen';
+import AdminScreen from '../screens/AdminScreen';
+import { useAuth } from '../context/AuthContext';
 
 const Tab = createBottomTabNavigator();
 
 export default function TabNavigator() {
+  const { user } = useAuth();
+  const isAdmin = user?.id === 1;
+
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
@@ -26,6 +31,8 @@ export default function TabNavigator() {
             iconName = focused ? 'football' : 'football-outline';
           } else if (route.name === 'Inställningar') {
             iconName = focused ? 'settings' : 'settings-outline';
+          } else if (route.name === 'Admin') {
+            iconName = focused ? 'shield' : 'shield-outline';
           } else {
             iconName = 'help-outline';
           }
@@ -68,6 +75,13 @@ export default function TabNavigator() {
         component={SettingsScreen}
         options={{ title: 'Inställningar' }}
       />
+      {isAdmin && (
+        <Tab.Screen
+          name="Admin"
+          component={AdminScreen}
+          options={{ title: 'Admin' }}
+        />
+      )}
     </Tab.Navigator>
   );
 }
