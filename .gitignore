@@ -42,3 +42,5 @@ bilder/
 # Firebase service account
 *.json.bak
 tipsitjanst-firebase-adminsdk-*.json
+/admin/bin/Debug/net10.0-windows
+/admin/obj
