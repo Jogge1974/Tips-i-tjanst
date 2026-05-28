@@ -1354,6 +1354,12 @@ app.http('api', {
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
                     return jsonResponse({ success: true, message: 'Push tables created' });
                 }
+                case 'getAdminData':
+                    return await getAdminData(params);
+                case 'setSpeletOppet':
+                    return await setSpeletOppet(params);
+                case 'saveAdminTipsrad':
+                    return await saveAdminTipsrad(params);
                 default:
                     return jsonResponse({ error: `Okänd action: ${action}` }, 400);
             }
@@ -1363,6 +1369,105 @@ app.http('api', {
         }
     }
 });
+
+// ===== ADMIN ENDPOINTS =====
+
+// GET ADMIN DATA - full coupon with tips, gardering stats, odds
+async function getAdminData(params) {
+    const userId = parseInt(params.userId || params.get?.('userId'));
+    if (userId !== 1) return jsonResponse({ error: 'Ej behörig' }, 403);
+
+    const db = getPool();
+    const [ekoRows] = await db.query('SELECT spelomgang, isSlutspel FROM TIT_ekonomi ORDER BY spelomgang DESC LIMIT 1');
+    const spelomgang = ekoRows.length ? ekoRows[0].spelomgang : '';
+
+    // Get speletOppet status
+    const [adminRows] = await db.query('SELECT speletOppet FROM TIT_admin LIMIT 1');
+    const speletOppetVal = adminRows.length ? adminRows[0].speletOppet : 0;
+
+    // Get matches with kupong info, lottning (who's responsible), and tipsrad
+    const [matches] = await db.query(`
+        SELECT k.matchNr, k.lag, k.liga, k.home, k.away, k.odds1, k.oddsX, k.odds2,
+               l.ansvarigId, u.fornamn, u.efternamn,
+               t.tecken AS grundtecken, t.evGardering, t.poangGrund
+        FROM TIT_kupong k
+        LEFT JOIN TIT_lottning l ON l.spelomgang = k.spelomgang AND l.matchNr = k.matchNr
+        LEFT JOIN TIT_TipsTjanst u ON u.id = l.ansvarigId
+        LEFT JOIN TIT_tipsrad t ON t.spelomgang = k.spelomgang AND t.matchNr = k.matchNr
+        WHERE k.spelomgang = ?
+        ORDER BY k.matchNr
+    `, [spelomgang]);
+
+    // Get gardering counts per match per sign
+    const [gardStats] = await db.query(`
+        SELECT matchNr, tecken, COUNT(*) AS antal
+        FROM TIT_garderingar
+        WHERE omgang = ? AND tecken != '-'
+        GROUP BY matchNr, tecken
+    `, [spelomgang]);
+
+    // Build gardering stats lookup
+    const gardMap = {};
+    for (const row of gardStats) {
+        if (!gardMap[row.matchNr]) gardMap[row.matchNr] = {};
+        gardMap[row.matchNr][row.tecken] = row.antal;
+    }
+
+    // Merge gardering stats into matches
+    const result = matches.map(m => ({
+        ...m,
+        gard1: gardMap[m.matchNr]?.['1'] || 0,
+        gardX: gardMap[m.matchNr]?.['X'] || 0,
+        gard2: gardMap[m.matchNr]?.['2'] || 0,
+    }));
+
+    return jsonResponse({
+        spelomgang,
+        speletOppet: speletOppetVal,
+        isSlutspel: ekoRows.length ? ekoRows[0].isSlutspel : 0,
+        matches: result
+    });
+}
+
+// SET SPELET ÖPPET
+async function setSpeletOppet(params) {
+    const userId = parseInt(params.userId || params.get?.('userId'));
+    if (userId !== 1) return jsonResponse({ error: 'Ej behörig' }, 403);
+
+    const value = parseInt(params.speletOppet ?? params.get?.('speletOppet'));
+    if (value !== 0 && value !== 1) return jsonResponse({ error: 'Ogiltigt värde' }, 400);
+
+    const db = getPool();
+    await db.query('UPDATE TIT_admin SET speletOppet = ?', [value]);
+    return jsonResponse({ success: true, speletOppet: value });
+}
+
+// SAVE ADMIN TIPSRAD - save grundtecken, garderingar, STMF for all 13 matches
+async function saveAdminTipsrad(params) {
+    const userId = parseInt(params.userId || params.get?.('userId'));
+    if (userId !== 1) return jsonResponse({ error: 'Ej behörig' }, 403);
+
+    const { matches } = params;
+    if (!matches || !Array.isArray(matches)) return jsonResponse({ error: 'Saknar matches-data' }, 400);
+
+    const db = getPool();
+    const [ekoRows] = await db.query('SELECT spelomgang FROM TIT_ekonomi ORDER BY spelomgang DESC LIMIT 1');
+    const spelomgang = ekoRows.length ? ekoRows[0].spelomgang : '';
+
+    // Delete existing tipsrad for this round
+    await db.query('DELETE FROM TIT_tipsrad WHERE spelomgang = ?', [spelomgang]);
+
+    // Insert each match
+    for (const m of matches) {
+        await db.query(
+            `INSERT INTO TIT_tipsrad (spelomgang, matchNr, tecken, evGardering, poangGrund, ansvarigId, slutspel)
+             VALUES (?, ?, ?, ?, ?, ?, 0)`,
+            [spelomgang, m.matchNr, m.tecken || '', m.evGardering || '', m.poangGrund ? 1 : 0, m.ansvarigId || 0]
+        );
+    }
+
+    return jsonResponse({ success: true });
+}
 
 // Timer trigger for push notifications - runs every 5 minutes
 app.timer('pushNotificationTimer', {
