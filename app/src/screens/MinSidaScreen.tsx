@@ -25,6 +25,7 @@ export default function MinSidaScreen() {
   const [myMatch, setMyMatch] = useState<MatchInfo | null>(null);
   const [kupong, setKupong] = useState<MatchInfo[]>([]);
   const [garderingar, setGarderingar] = useState<Gardering[]>([]);
+  const savedGarderingar = useRef<Gardering[]>([]);
   const [selectedTecken, setSelectedTecken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -82,6 +83,7 @@ export default function MinSidaScreen() {
         ]);
         setKupong(kupongData);
         setGarderingar(gardData);
+        savedGarderingar.current = gardData;
       }
     } catch (error: any) {
       Alert.alert('Fel', error.message);
@@ -135,11 +137,6 @@ export default function MinSidaScreen() {
       } else {
         // Ta bort annat tecken på samma match (bara en gardering per match)
         const filtered = prev.filter((g) => g.matchNr !== matchNr);
-        // Kolla om vi nått max
-        if (filtered.length >= maxGarderingar) {
-          Alert.alert('Max garderingar', `Du kan max lämna ${maxGarderingar} garderingar`);
-          return prev;
-        }
         return [...filtered, { matchNr, tecken }];
       }
     });
@@ -154,6 +151,7 @@ export default function MinSidaScreen() {
     try {
       const result = await api.saveGarderingar(user.id, garderingar);
       if (result.success) {
+        savedGarderingar.current = [...garderingar];
         Alert.alert('Sparat', status?.isSlutspel === 1 ? 'Din enkelrad är sparad!' : 'Dina garderingar är sparade!');
         loadData();
       } else {
@@ -503,6 +501,24 @@ export default function MinSidaScreen() {
   }
 
   // Garderingar öppet
+  const hasUnsavedChanges = JSON.stringify(
+    [...garderingar].sort((a, b) => a.matchNr - b.matchNr || a.tecken.localeCompare(b.tecken))
+  ) !== JSON.stringify(
+    [...savedGarderingar.current].sort((a, b) => a.matchNr - b.matchNr || a.tecken.localeCompare(b.tecken))
+  );
+  const gardDiff = garderingar.length - maxGarderingar;
+  const gardReady = gardDiff === 0;
+  const gardRemaining = Math.abs(gardDiff);
+  const gardBarPct = Math.min((garderingar.length / maxGarderingar) * 100, 100);
+  const gardBarColor = gardReady ? '#1B5E20' : gardDiff < 0 ? '#F57C00' : '#D32F2F';
+  const gardLabel = status.isSlutspel === 1 ? 'tecken' : 'garderingar';
+  const gardLabelSingular = status.isSlutspel === 1 ? 'tecken' : 'gardering';
+  const gardStatusMsg = gardReady
+    ? ''
+    : gardDiff < 0
+      ? `${gardRemaining} ${gardRemaining === 1 ? gardLabelSingular : gardLabel} kvar`
+      : `${gardRemaining} för mycket`;
+
   return (
     <ScrollView
       style={styles.container}
@@ -517,14 +533,19 @@ export default function MinSidaScreen() {
         <Text style={styles.gardHeaderSub}>Omgång {status.spelomgang}</Text>
       </View>
 
-      <View style={styles.gardCounterCard}>
+      <View style={[styles.gardCounterCard, gardReady && styles.gardCounterCardReady]}>
         <View style={styles.gardCounterBar}>
-          <View style={[styles.gardCounterFill, { width: `${(garderingar.length / maxGarderingar) * 100}%` }]} />
+          <View style={[styles.gardCounterFill, { width: `${gardBarPct}%`, backgroundColor: gardBarColor }]} />
         </View>
         <Text style={styles.gardCounterText}>
-          {garderingar.length} / {maxGarderingar} {status.isSlutspel === 1 ? 'tecken' : 'garderingar'}
-          {status.isSlutspel === 0 ? ' (exakt 10)' : ' (alla 13)'}
+          {garderingar.length} / {maxGarderingar} {gardLabel}
         </Text>
+        <Text style={[styles.gardStatusMsg, { color: gardBarColor }]}>
+          {gardStatusMsg}
+        </Text>
+        {hasUnsavedChanges && (
+          <Text style={styles.gardUnsavedText}>⚠ Ändringar ej sparade</Text>
+        )}
       </View>
 
       <View style={styles.gardCard}>
@@ -588,8 +609,29 @@ export default function MinSidaScreen() {
         })}
       </View>
 
-      <TouchableOpacity style={styles.gardSaveBtn} onPress={handleSaveGarderingar}>
-        <Text style={styles.gardSaveBtnText}>{status.isSlutspel === 1 ? 'Spara enkelrad' : 'Spara garderingar'}</Text>
+      <View style={[styles.gardCounterCard, gardReady && styles.gardCounterCardReady]}>
+        <View style={styles.gardCounterBar}>
+          <View style={[styles.gardCounterFill, { width: `${gardBarPct}%`, backgroundColor: gardBarColor }]} />
+        </View>
+        <Text style={styles.gardCounterText}>
+          {garderingar.length} / {maxGarderingar} {gardLabel}
+        </Text>
+        <Text style={[styles.gardStatusMsg, { color: gardBarColor }]}>
+          {gardStatusMsg}
+        </Text>
+        {hasUnsavedChanges && (
+          <Text style={styles.gardUnsavedText}>⚠ Ändringar ej sparade</Text>
+        )}
+      </View>
+
+      <TouchableOpacity
+        style={[styles.gardSaveBtn, !gardReady && styles.gardSaveBtnDisabled]}
+        onPress={handleSaveGarderingar}
+        disabled={!gardReady}
+      >
+        <Text style={[styles.gardSaveBtnText, !gardReady && styles.gardSaveBtnTextDisabled]}>
+          {status.isSlutspel === 1 ? 'Spara enkelrad' : 'Spara garderingar'}
+        </Text>
       </TouchableOpacity>
 
       {/* Matchanalys-modal */}
@@ -1038,6 +1080,31 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 17,
     fontWeight: '700',
+  },
+  gardSaveBtnDisabled: {
+    backgroundColor: '#BDBDBD',
+    shadowOpacity: 0,
+    elevation: 0,
+  },
+  gardSaveBtnTextDisabled: {
+    color: 'rgba(255,255,255,0.7)',
+  },
+  gardStatusMsg: {
+    fontSize: 14,
+    fontWeight: '700',
+    textAlign: 'center',
+    marginTop: 6,
+  },
+  gardCounterCardReady: {
+    borderColor: '#1B5E20',
+    borderWidth: 1.5,
+  },
+  gardUnsavedText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#F57C00',
+    textAlign: 'center',
+    marginTop: 6,
   },
   centeredContainer: {
     flexGrow: 1,
