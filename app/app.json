@@ -27,8 +27,7 @@
       },
       "package": "se.liveidrott.tipsitjanst",
       "versionCode": 3,
-      "usesCleartextTraffic": true,
-      "newArchEnabled": false
+      "usesCleartextTraffic": true
     },
     "web": {
       "favicon": "./assets/favicon.png"
