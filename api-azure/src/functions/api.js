@@ -103,6 +103,169 @@ async function getStatus() {
     return jsonResponse({ speletOppet: status, spelomgang, isSlutspel, antalRatt });
 }
 
+// GET DASHBOARD - aggregated home screen data
+async function getDashboard(query) {
+    const userId = parseInt(query.userId);
+    if (!userId) return jsonResponse({ error: 'Saknar userId' }, 400);
+
+    const db = getPool();
+    const status = await speletOppet(db);
+
+    // Current round info
+    const [ekoRows] = await db.query('SELECT * FROM TIT_ekonomi ORDER BY spelomgang DESC LIMIT 1');
+    if (!ekoRows.length) return jsonResponse({ error: 'Ingen ekonomidata' }, 404);
+    const current = ekoRows[0];
+    const spelomgang = current.spelomgang;
+    const sasong = current.sasong;
+
+    // Season economy: sum insats+extraInsats vs vinst+extraVinst
+    const [ecoRows] = await db.query(
+        `SELECT SUM(insats + extraInsats) as totalInsats, SUM(vinst + extraVinst) as totalVinst
+         FROM TIT_ekonomi WHERE sasong = ?`,
+        [sasong]
+    );
+    const totalInsats = ecoRows[0].totalInsats || 0;
+    const totalVinst = ecoRows[0].totalVinst || 0;
+
+    // TipsAllsvenskan leader + user position
+    const [maxSasong] = await db.query('SELECT MAX(sasong) as s FROM TIT_TipsAllsvenskan');
+    let leader = null;
+    let myPosition = null;
+    let myPoang = null;
+    let slutspelsInfo = '';
+    if (maxSasong.length && maxSasong[0].s) {
+        const [standings] = await db.query(
+            `SELECT a.id, a.poang, CONCAT(u.fornamn, ' ', u.efternamn) as namn
+             FROM TIT_TipsAllsvenskan a
+             JOIN TIT_TipsTjanst u ON u.id = a.id
+             WHERE a.sasong = ?
+             ORDER BY a.poang DESC`,
+            [maxSasong[0].s]
+        );
+        if (standings.length) {
+            leader = { namn: standings[0].namn, poang: standings[0].poang };
+            const myEntry = standings.find(s => s.id === userId);
+            if (myEntry) {
+                myPosition = standings.indexOf(myEntry) + 1;
+                myPoang = myEntry.poang;
+                // Slutspels info
+                if (standings.length >= 8) {
+                    if (myPosition <= 8) {
+                        const ninth = standings[8];
+                        if (ninth) slutspelsInfo = `${(myEntry.poang - ninth.poang).toFixed(1)}p ner till 9:an`;
+                        else slutspelsInfo = 'Slutspelsplats!';
+                    } else {
+                        const eighth = standings[7];
+                        if (eighth) slutspelsInfo = `${(eighth.poang - myEntry.poang).toFixed(1)}p upp till 8:an`;
+                    }
+                }
+            }
+        }
+    }
+
+    // Last completed round result (where antalRatt is filled in)
+    const [lastRound] = await db.query(
+        `SELECT spelomgang, antalRatt, vinst, extraVinst
+         FROM TIT_ekonomi WHERE sasong = ? AND antalRatt > 0
+         ORDER BY spelomgang DESC LIMIT 1`,
+        [sasong]
+    );
+    const lastResult = lastRound.length ? {
+        spelomgang: lastRound[0].spelomgang,
+        antalRatt: lastRound[0].antalRatt,
+        vinst: lastRound[0].vinst + lastRound[0].extraVinst,
+    } : null;
+
+    // Streak: consecutive rounds with 10+ rätt (current season, backwards)
+    const [allRounds] = await db.query(
+        `SELECT antalRatt FROM TIT_ekonomi WHERE sasong = ? AND antalRatt > 0 ORDER BY spelomgang DESC`,
+        [sasong]
+    );
+    let streak = 0;
+    for (const r of allRounds) {
+        if (r.antalRatt >= 10) streak++;
+        else break;
+    }
+
+    // Has user tipped this round?
+    const [tipsrad] = await db.query(
+        'SELECT matchNr FROM TIT_tipsrad WHERE spelomgang = ? AND ansvarigId = ? LIMIT 1',
+        [spelomgang, userId]
+    );
+    const hasTipped = tipsrad.length > 0;
+
+    // Has user submitted garderingar?
+    const [gard] = await db.query(
+        'SELECT matchNr FROM TIT_garderingar WHERE omgang = ? AND id = ? LIMIT 1',
+        [spelomgang, userId]
+    );
+    const hasGardering = gard.length > 0;
+
+    // Current tipsrad (all 13 matches with team names and signs)
+    const [tipsradRows] = await db.query(
+        `SELECT t.matchNr, t.tecken, t.evGardering, k.home, k.away
+         FROM TIT_tipsrad t
+         LEFT JOIN TIT_kupong k ON k.spelomgang = t.spelomgang AND k.matchNr = t.matchNr
+         WHERE t.spelomgang = ?
+         ORDER BY t.matchNr`,
+        [spelomgang]
+    );
+
+    // System info (hel/halv/rader/garanti)
+    let systemInfo = null;
+    if (tipsradRows.length > 0 && current.drawNumber) {
+        let hel = 0, halv = 0;
+        for (const r of tipsradRows) {
+            const extraSigns = (r.evGardering || '').length;
+            if (extraSigns === 2) hel++;
+            else if (extraSigns === 1) halv++;
+        }
+        const [sysCount] = await db.query(
+            'SELECT COUNT(*) as cnt FROM TIT_systemrader WHERE drawNumber = ?',
+            [current.drawNumber]
+        );
+        const antalRader = sysCount[0].cnt;
+        const variableCount = hel + halv;
+        const grupper = variableCount > 0 ? Math.ceil(variableCount / 3) : 0;
+        const garanti = grupper > 0 ? 13 - grupper : 13;
+        systemInfo = { hel, halv, rader: antalRader, garanti };
+    }
+
+    // Live status check (only when game is closed)
+    let liveState = 'waiting'; // 'waiting' | 'live' | 'finished'
+    if (status === 0 && current.drawNumber) {
+        try {
+            const drawUrl = `${SVENSKA_SPEL_BASE}draws/${current.drawNumber}?accesskey=${SVENSKA_SPEL_KEY}`;
+            const drawResp = await fetch(drawUrl);
+            const drawJson = await drawResp.json();
+            const drawState = drawJson?.draw?.drawState;
+            if (drawState === 'Finalized') liveState = 'finished';
+            else if (drawState === 'Opened') {
+                // Check if any event has started
+                const events = drawJson?.draw?.drawEvents || [];
+                const started = events.some(e => e.sportEventStatus !== 'Inte startat');
+                liveState = started ? 'live' : 'waiting';
+            }
+        } catch (e) { /* keep waiting */ }
+    }
+
+    return jsonResponse({
+        status: { speletOppet: status, spelomgang, isSlutspel: current.isSlutspel, antalRatt: current.antalRatt },
+        seasonEconomy: { totalInsats, totalVinst, balance: totalVinst - totalInsats, sasong },
+        leader,
+        myPosition,
+        myPoang,
+        slutspelsInfo,
+        lastResult,
+        streak,
+        hasTipped,
+        hasGardering,
+        tipsrad: tipsradRows,
+        liveState,
+        systemInfo,
+    });
+}
+
 // GET MY MATCH - get the match assigned to a user for tipping
 async function getMyMatch(query) {
     const userId = query.userId;
@@ -798,6 +961,11 @@ async function registerPushToken(params) {
         sentAt DATETIME DEFAULT CURRENT_TIMESTAMP,
         UNIQUE KEY unique_notis (userId, notisType, spelomgang)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+    // Remove this token from any other user (device changed owner)
+    await db.query(
+        'DELETE FROM TIT_push_tokens WHERE pushToken = ? AND userId != ?',
+        [pushToken, userId]
+    );
     await db.query(
         `INSERT INTO TIT_push_tokens (userId, pushToken, platform)
          VALUES (?, ?, ?)
@@ -1244,6 +1412,8 @@ app.http('api', {
                     return await login(params);
                 case 'getStatus':
                     return await getStatus();
+                case 'getDashboard':
+                    return await getDashboard(params);
                 case 'getMyMatch':
                     return await getMyMatch(params);
                 case 'getKupong':
@@ -1360,6 +1530,12 @@ app.http('api', {
                     return await setSpeletOppet(params);
                 case 'saveAdminTipsrad':
                     return await saveAdminTipsrad(params);
+                case 'getEkonomiData':
+                    return await getEkonomiData(params);
+                case 'saveEkonomi':
+                    return await saveEkonomi(params);
+                case 'generateSystem':
+                    return await generateSystem(params);
                 default:
                     return jsonResponse({ error: `Okänd action: ${action}` }, 400);
             }
@@ -1389,7 +1565,7 @@ async function getAdminData(params) {
     const [matches] = await db.query(`
         SELECT k.matchNr, k.lag, k.liga, k.home, k.away, k.odds1, k.oddsX, k.odds2,
                l.ansvarigId, u.fornamn, u.efternamn,
-               t.tecken AS grundtecken, t.evGardering, t.poangGrund
+               t.tecken AS grundtecken, t.evGardering, t.poangGrund, t.matematisk
         FROM TIT_kupong k
         LEFT JOIN TIT_lottning l ON l.spelomgang = k.spelomgang AND l.matchNr = k.matchNr
         LEFT JOIN TIT_TipsTjanst u ON u.id = l.ansvarigId
@@ -1460,13 +1636,445 @@ async function saveAdminTipsrad(params) {
     // Insert each match
     for (const m of matches) {
         await db.query(
-            `INSERT INTO TIT_tipsrad (spelomgang, matchNr, tecken, evGardering, poangGrund, ansvarigId, slutspel)
-             VALUES (?, ?, ?, ?, ?, ?, 0)`,
-            [spelomgang, m.matchNr, m.tecken || '', m.evGardering || '', m.poangGrund ? 1 : 0, m.ansvarigId || 0]
+            `INSERT INTO TIT_tipsrad (spelomgang, matchNr, tecken, evGardering, poangGrund, matematisk, ansvarigId, slutspel)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
+            [spelomgang, m.matchNr, m.tecken || '', m.evGardering || '', m.poangGrund ? 1 : 0, m.matematisk ? 1 : 0, m.ansvarigId || 0]
         );
     }
 
     return jsonResponse({ success: true });
+}
+
+// GET EKONOMI DATA - get current round's economy data + system row count
+async function getEkonomiData(params) {
+    const userId = parseInt(params.userId || params.get?.('userId'));
+    if (userId !== 1) return jsonResponse({ error: 'Ej behörig' }, 403);
+
+    const db = getPool();
+    const [ekoRows] = await db.query('SELECT * FROM TIT_ekonomi ORDER BY spelomgang DESC LIMIT 1');
+    if (!ekoRows.length) return jsonResponse({ error: 'Ingen ekonomidata' }, 404);
+
+    const eko = ekoRows[0];
+
+    // Get system row count (insats = antal rader)
+    const [sysRows] = await db.query(
+        'SELECT COUNT(*) as antalRader FROM TIT_systemrader WHERE drawNumber = ?',
+        [eko.drawNumber]
+    );
+    const antalRader = sysRows.length ? sysRows[0].antalRader : 0;
+
+    return jsonResponse({
+        spelomgang: eko.spelomgang,
+        sasong: eko.sasong,
+        antalRatt: eko.antalRatt,
+        veckansKapital: eko.veckansKapital,
+        insats: eko.insats,
+        vinst: eko.vinst,
+        extraInsats: eko.extraInsats,
+        extraVinst: eko.extraVinst,
+        utdelning: eko.utdelning,
+        kommentar: eko.kommentar || '',
+        isSlutspel: eko.isSlutspel,
+        drawNumber: eko.drawNumber,
+        antalRader,
+    });
+}
+
+// SAVE EKONOMI - update economy fields for current round
+async function saveEkonomi(params) {
+    const userId = parseInt(params.userId || params.get?.('userId'));
+    if (userId !== 1) return jsonResponse({ error: 'Ej behörig' }, 403);
+
+    const { veckansKapital, insats, vinst, antalRatt, isSlutspel, extraInsats, extraVinst, kommentar, utdelning } = params;
+
+    const db = getPool();
+    const [ekoRows] = await db.query('SELECT spelomgang FROM TIT_ekonomi ORDER BY spelomgang DESC LIMIT 1');
+    if (!ekoRows.length) return jsonResponse({ error: 'Ingen ekonomidata' }, 404);
+    const spelomgang = ekoRows[0].spelomgang;
+
+    await db.query(
+        `UPDATE TIT_ekonomi SET
+            veckansKapital = ?,
+            insats = ?,
+            vinst = ?,
+            antalRatt = ?,
+            isSlutspel = ?,
+            extraInsats = ?,
+            extraVinst = ?,
+            kommentar = ?,
+            utdelning = ?
+        WHERE spelomgang = ?`,
+        [
+            parseInt(veckansKapital) || 0,
+            parseInt(insats) || 0,
+            parseInt(vinst) || 0,
+            parseInt(antalRatt) || 0,
+            parseInt(isSlutspel) || 0,
+            parseInt(extraInsats) || 0,
+            parseInt(extraVinst) || 0,
+            kommentar || '',
+            parseInt(utdelning) || 0,
+            spelomgang
+        ]
+    );
+
+    return jsonResponse({ success: true });
+}
+
+// ===== SYSTEM GENERATION (Reduction Algorithm) =====
+
+// GENERATE SYSTEM - replicate TipsAdmin reduction on server
+async function generateSystem(params) {
+    const userId = parseInt(params.userId || params.get?.('userId'));
+    if (userId !== 1) return jsonResponse({ error: 'Ej behörig' }, 403);
+
+    const { matches } = params;
+    if (!matches || !Array.isArray(matches) || matches.length !== 13) {
+        return jsonResponse({ error: 'Saknar 13 matcher' }, 400);
+    }
+
+    // Build selections from match data
+    const selections = matches.map((m, i) => {
+        const grund = m.tecken || '';
+        const gard = m.evGardering || '';
+        const matematik = m.matematisk ? true : false;
+        const etta = grund === '1' || gard.includes('1');
+        const kryss = grund === 'X' || gard.includes('X');
+        const tvaa = grund === '2' || gard.includes('2');
+        const antalTecken = (etta ? 1 : 0) + (kryss ? 1 : 0) + (tvaa ? 1 : 0);
+        const isEnkeltecken = antalTecken === 1;
+        const isHalvgardering = antalTecken === 2 && !matematik;
+        const isHelgardering = antalTecken === 3 && !matematik;
+        const isMatematisk = antalTecken >= 2 && matematik;
+        const getTecken = () => {
+            const r = [];
+            if (etta) r.push('1');
+            if (kryss) r.push('X');
+            if (tvaa) r.push('2');
+            return r;
+        };
+        return { matchNr: i + 1, etta, kryss, tvaa, matematik, antalTecken, isEnkeltecken, isHalvgardering, isHelgardering, isMatematisk, getTecken };
+    });
+
+    // Run smart reduction
+    const { rows, grupper, garantiNiva } = smartReduce(selections);
+
+    // Save to database
+    const db = getPool();
+    const [ekoRows] = await db.query('SELECT drawNumber FROM TIT_ekonomi ORDER BY spelomgang DESC LIMIT 1');
+    const drawNumber = ekoRows.length ? ekoRows[0].drawNumber : 0;
+
+    if (drawNumber) {
+        await db.query('DELETE FROM TIT_systemrader WHERE drawNumber = ?', [drawNumber]);
+        for (let i = 0; i < rows.length; i++) {
+            const row = rows[i];
+            await db.query(
+                'INSERT INTO TIT_systemrader (drawNumber, radNr, m1,m2,m3,m4,m5,m6,m7,m8,m9,m10,m11,m12,m13) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                [drawNumber, i + 1, row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9], row[10], row[11], row[12]]
+            );
+        }
+    }
+
+    // Generate text file content
+    const fileContent = 'Stryktipset\n' + rows.map(r => 'E,' + r.split('').join(',')).join('\n');
+
+    return jsonResponse({
+        success: true,
+        antalRader: rows.length,
+        grupper,
+        garantiNiva,
+        drawNumber,
+        fileContent,
+    });
+}
+
+// ===== REDUCTION ALGORITHM FUNCTIONS =====
+
+function smartReduce(selections) {
+    const variablePositions = [];
+    for (let i = 0; i < selections.length; i++) {
+        if (selections[i].isHalvgardering || selections[i].isHelgardering)
+            variablePositions.push(i);
+    }
+
+    if (variablePositions.length === 0) {
+        return { rows: generateAllRows(selections), grupper: 0, garantiNiva: 13 };
+    }
+
+    // Sort: helgarderingar first (3 tecken), then halvgarderingar (2 tecken)
+    // This ensures balanced distribution across groups
+    variablePositions.sort((a, b) => {
+        const diff = selections[b].antalTecken - selections[a].antalTecken;
+        return diff !== 0 ? diff : a - b;
+    });
+
+    let variabelMatematiskt = 1;
+    for (const pos of variablePositions)
+        variabelMatematiskt *= selections[pos].antalTecken;
+
+    let antalGrupper = 1;
+    if (variabelMatematiskt > 243) {
+        for (let tryGroups = 2; tryGroups <= 4; tryGroups++) {
+            const testGroupMat = new Array(tryGroups).fill(1);
+            for (let i = 0; i < variablePositions.length; i++)
+                testGroupMat[i % tryGroups] *= selections[variablePositions[i]].antalTecken;
+            if (testGroupMat.every(m => m <= 243)) {
+                antalGrupper = tryGroups;
+                break;
+            }
+        }
+        if (antalGrupper === 1) antalGrupper = 4;
+    }
+
+    if (antalGrupper === 1) {
+        const rows = reduceSystem(selections);
+        return { rows, grupper: 1, garantiNiva: 12 };
+    } else {
+        const groupAssignment = new Array(selections.length).fill(0);
+        for (let i = 0; i < variablePositions.length; i++)
+            groupAssignment[variablePositions[i]] = (i % antalGrupper) + 1;
+        const rows = reduceCombinedSystem(selections, groupAssignment, antalGrupper);
+        return { rows, grupper: antalGrupper, garantiNiva: 13 - antalGrupper };
+    }
+}
+
+function generateAllRows(selections) {
+    let rows = [''];
+    for (const sel of selections) {
+        const tecken = sel.getTecken();
+        const newRows = [];
+        for (const row of rows) {
+            for (const t of tecken) {
+                newRows.push(row + t);
+            }
+        }
+        rows = newRows;
+    }
+    return rows;
+}
+
+function reduceSystem(selections) {
+    const reducedPositions = [];
+    for (let i = 0; i < selections.length; i++) {
+        if (selections[i].isHalvgardering || selections[i].isHelgardering)
+            reducedPositions.push(i);
+    }
+
+    if (reducedPositions.length === 0) return generateAllRows(selections);
+
+    // Sort: helgarderingar first, then halvgarderingar
+    reducedPositions.sort((a, b) => {
+        const countDiff = selections[b].antalTecken - selections[a].antalTecken;
+        return countDiff !== 0 ? countDiff : a - b;
+    });
+
+    const reducedSelections = reducedPositions.map(i => selections[i]);
+    const allOutcomes = generateAllRows(reducedSelections);
+    const coveringSet = greedyCoveringCode(allOutcomes);
+    return expandWithMatematiska(selections, reducedPositions, coveringSet);
+}
+
+function reduceCombinedSystem(selections, groupAssignment, antalGrupper) {
+    const groupPositions = Array.from({ length: antalGrupper }, () => []);
+    for (let i = 0; i < selections.length; i++) {
+        const g = groupAssignment[i];
+        if (g >= 1 && g <= antalGrupper)
+            groupPositions[g - 1].push(i);
+    }
+
+    const coveringSets = [];
+    for (let g = 0; g < antalGrupper; g++) {
+        const groupSel = groupPositions[g].map(i => selections[i]);
+        const allOutcomes = generateAllRows(groupSel);
+        coveringSets.push(greedyCoveringCode(allOutcomes));
+    }
+
+    // Cartesian product
+    let combined = [new Array(antalGrupper)];
+    for (let g = 0; g < antalGrupper; g++) {
+        const newCombined = [];
+        for (const existing of combined) {
+            for (const item of coveringSets[g]) {
+                const copy = [...existing];
+                copy[g] = item;
+                newCombined.push(copy);
+            }
+        }
+        combined = newCombined;
+    }
+
+    const baseRows = [];
+    for (const combo of combined) {
+        const fullRow = new Array(13);
+        for (let i = 0; i < selections.length; i++) {
+            const g = groupAssignment[i];
+            if (g >= 1 && g <= antalGrupper) {
+                const posInGroup = groupPositions[g - 1].indexOf(i);
+                fullRow[i] = combo[g - 1][posInGroup];
+            } else if (selections[i].isEnkeltecken) {
+                fullRow[i] = selections[i].getTecken()[0];
+            } else if (selections[i].isMatematisk) {
+                fullRow[i] = '0';
+            }
+        }
+        baseRows.push(fullRow.join(''));
+    }
+
+    return expandMatPositions(selections, baseRows);
+}
+
+function expandWithMatematiska(selections, reducedPositions, coveringSet) {
+    const baseRows = [];
+    for (const reducedRow of coveringSet) {
+        const fullRow = new Array(13);
+        for (let i = 0; i < selections.length; i++) {
+            const idxInReduced = reducedPositions.indexOf(i);
+            if (idxInReduced >= 0) {
+                fullRow[i] = reducedRow[idxInReduced];
+            } else if (selections[i].isEnkeltecken) {
+                fullRow[i] = selections[i].getTecken()[0];
+            } else {
+                fullRow[i] = '0';
+            }
+        }
+        baseRows.push(fullRow.join(''));
+    }
+    return expandMatPositions(selections, baseRows);
+}
+
+function expandMatPositions(selections, baseRows) {
+    const matPositions = [];
+    for (let i = 0; i < selections.length; i++) {
+        if (selections[i].isMatematisk) matPositions.push(i);
+    }
+    if (matPositions.length === 0) return baseRows;
+
+    const expandedRows = [];
+    for (const baseRow of baseRows) {
+        let expanded = [baseRow];
+        for (const pos of matPositions) {
+            const tecken = selections[pos].getTecken();
+            const newExpanded = [];
+            for (const row of expanded) {
+                for (const t of tecken) {
+                    const chars = row.split('');
+                    chars[pos] = t;
+                    newExpanded.push(chars.join(''));
+                }
+            }
+            expanded = newExpanded;
+        }
+        expandedRows.push(...expanded);
+    }
+    return expandedRows;
+}
+
+function greedyCoveringCode(allOutcomes) {
+    const restarts = allOutcomes.length <= 100 ? 200
+                   : allOutcomes.length <= 300 ? 100
+                   : allOutcomes.length <= 1000 ? 40
+                   : 15;
+    let bestResult = null;
+
+    for (let attempt = 0; attempt < restarts; attempt++) {
+        let candidates = [...allOutcomes];
+        if (attempt > 0) {
+            // Seeded shuffle for reproducibility
+            for (let i = candidates.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
+            }
+        }
+        let coveringSet = greedyPass(candidates, allOutcomes);
+        coveringSet = removeRedundant(coveringSet, allOutcomes);
+        if (!bestResult || coveringSet.length < bestResult.length)
+            bestResult = coveringSet;
+    }
+
+    bestResult = localSearch(bestResult, allOutcomes);
+    return bestResult;
+}
+
+function greedyPass(candidates, allOutcomes) {
+    const coveringSet = [];
+    const uncovered = new Set(allOutcomes.map((_, i) => i));
+
+    while (uncovered.size > 0) {
+        let bestRow = '';
+        let bestCoverage = -1;
+        for (const candidate of candidates) {
+            let coverage = 0;
+            for (const idx of uncovered) {
+                if (hammingDistance(candidate, allOutcomes[idx]) <= 1) coverage++;
+            }
+            if (coverage > bestCoverage) {
+                bestCoverage = coverage;
+                bestRow = candidate;
+            }
+        }
+        coveringSet.push(bestRow);
+        const nowCovered = [];
+        for (const idx of uncovered) {
+            if (hammingDistance(bestRow, allOutcomes[idx]) <= 1) nowCovered.push(idx);
+        }
+        for (const idx of nowCovered) uncovered.delete(idx);
+    }
+    return coveringSet;
+}
+
+function removeRedundant(coveringSet, allOutcomes) {
+    let result = [...coveringSet];
+    for (let i = result.length - 1; i >= 0; i--) {
+        const without = result.filter((_, idx) => idx !== i);
+        if (isCovering(without, allOutcomes)) result = without;
+    }
+    return result;
+}
+
+function localSearch(coveringSet, allOutcomes) {
+    let best = [...coveringSet];
+    for (let pass = 0; pass < 3; pass++) {
+        let improved = false;
+        for (let i = best.length - 1; i >= 0; i--) {
+            const without = best.filter((_, idx) => idx !== i);
+            const uncoveredIdxs = [];
+            for (let o = 0; o < allOutcomes.length; o++) {
+                if (!without.some(cw => hammingDistance(cw, allOutcomes[o]) <= 1))
+                    uncoveredIdxs.push(o);
+            }
+            if (uncoveredIdxs.length === 0) {
+                best = without;
+                improved = true;
+                continue;
+            }
+            for (const candidate of allOutcomes) {
+                if (without.includes(candidate)) continue;
+                if (uncoveredIdxs.every(idx => hammingDistance(candidate, allOutcomes[idx]) <= 1)) {
+                    without.push(candidate);
+                    best = removeRedundant(without, allOutcomes);
+                    improved = true;
+                    break;
+                }
+            }
+        }
+        if (!improved) break;
+    }
+    return best;
+}
+
+function isCovering(coveringSet, allOutcomes) {
+    for (const outcome of allOutcomes) {
+        if (!coveringSet.some(cw => hammingDistance(cw, outcome) <= 1)) return false;
+    }
+    return true;
+}
+
+function hammingDistance(a, b) {
+    let dist = 0;
+    for (let i = 0; i < a.length; i++) {
+        if (a[i] !== b[i]) dist++;
+    }
+    return dist;
 }
 
 // Timer trigger for push notifications - runs every 5 minutes

@@ -141,4 +141,10 @@ export const api = {
     if (!response.ok) throw new Error('Kunde inte hämta TipsAllsvenskan');
     return response.json();
   },
+
+  async getDashboard(userId: number): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}?action=getDashboard&userId=${userId}`);
+    if (!response.ok) throw new Error('Kunde inte hämta dashboard');
+    return response.json();
+  },
 };

@@ -11,9 +11,14 @@ import {
   RefreshControl,
   Modal,
   Image,
+  TextInput,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../context/AuthContext';
+import { File, Paths } from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
 
 const API_BASE_URL = 'https://tipstjanst-api-bpdxhah7f9hxhpce.westeurope-01.azurewebsites.net/api/api';
 
@@ -32,6 +37,7 @@ interface AdminMatch {
   grundtecken: string | null;
   evGardering: string | null;
   poangGrund: number | null;
+  matematisk: number | null;
   gard1: number;
   gardX: number;
   gard2: number;
@@ -44,6 +50,22 @@ interface AdminData {
   matches: AdminMatch[];
 }
 
+interface EkonomiData {
+  spelomgang: string;
+  sasong: number;
+  antalRatt: number;
+  veckansKapital: number;
+  insats: number;
+  vinst: number;
+  extraInsats: number;
+  extraVinst: number;
+  utdelning: number;
+  kommentar: string;
+  isSlutspel: number;
+  drawNumber: number;
+  antalRader: number;
+}
+
 export default function AdminScreen() {
   const { user } = useAuth();
   const [data, setData] = useState<AdminData | null>(null);
@@ -53,10 +75,30 @@ export default function AdminScreen() {
   const [speletOppet, setSpeletOppet] = useState(false);
   const [matches, setMatches] = useState<AdminMatch[]>([]);
   const [hasChanges, setHasChanges] = useState(false);
+  const [panelMode, setPanelMode] = useState<'grund' | 'gard'>('grund');
+  const [generateOnSave, setGenerateOnSave] = useState(false);
   const [analysisModal, setAnalysisModal] = useState<{
     visible: boolean; home: any; away: any; standings: any[]; league: string;
     eventHome: string; eventAway: string; loading: boolean;
   }>({ visible: false, home: null, away: null, standings: [], league: '', eventHome: '', eventAway: '', loading: false });
+
+  // Ekonomi state
+  const [ekonomi, setEkonomi] = useState<EkonomiData | null>(null);
+  const [ekoLoading, setEkoLoading] = useState(false);
+  const [ekoSaving, setEkoSaving] = useState(false);
+
+  const loadEkonomi = useCallback(async () => {
+    if (!user || user.id !== 1) return;
+    setEkoLoading(true);
+    try {
+      const resp = await fetch(`${API_BASE_URL}?action=getEkonomiData&userId=${user.id}`);
+      const json = await resp.json();
+      if (!json.error) {
+        setEkonomi(json);
+      }
+    } catch { }
+    setEkoLoading(false);
+  }, [user]);
 
   const loadData = useCallback(async () => {
     if (!user || user.id !== 1) return;
@@ -82,8 +124,47 @@ export default function AdminScreen() {
   useFocusEffect(
     useCallback(() => {
       loadData();
-    }, [loadData])
+      loadEkonomi();
+    }, [loadData, loadEkonomi])
   );
+
+  const saveEkonomi = async () => {
+    if (!user || !ekonomi) return;
+    setEkoSaving(true);
+    try {
+      const resp = await fetch(`${API_BASE_URL}?action=saveEkonomi`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: user.id,
+          veckansKapital: ekonomi.veckansKapital,
+          insats: ekonomi.insats,
+          vinst: ekonomi.vinst,
+          antalRatt: ekonomi.antalRatt,
+          isSlutspel: ekonomi.isSlutspel,
+          extraInsats: ekonomi.extraInsats,
+          extraVinst: ekonomi.extraVinst,
+          kommentar: ekonomi.kommentar,
+          utdelning: ekonomi.utdelning,
+        }),
+      });
+      const json = await resp.json();
+      if (json.success) {
+        Alert.alert('Sparat', 'Ekonomi sparad!');
+      } else {
+        Alert.alert('Fel', json.error || 'Kunde inte spara');
+      }
+    } catch (err: any) {
+      Alert.alert('Fel', err.message);
+    } finally {
+      setEkoSaving(false);
+    }
+  };
+
+  const updateEkonomi = (field: keyof EkonomiData, value: string | number) => {
+    if (!ekonomi) return;
+    setEkonomi({ ...ekonomi, [field]: value });
+  };
 
   const toggleSpeletOppet = async (value: boolean) => {
     setSpeletOppet(value);
@@ -136,6 +217,14 @@ export default function AdminScreen() {
     setHasChanges(true);
   };
 
+  const toggleMatematisk = (matchNr: number) => {
+    setMatches(prev => prev.map(m => {
+      if (m.matchNr !== matchNr) return m;
+      return { ...m, matematisk: m.matematisk === 1 ? 0 : 1 };
+    }));
+    setHasChanges(true);
+  };
+
   const handleSave = async () => {
     if (!user) return;
     setSaving(true);
@@ -145,6 +234,7 @@ export default function AdminScreen() {
         tecken: m.grundtecken || '',
         evGardering: m.evGardering || '',
         poangGrund: m.poangGrund || 0,
+        matematisk: m.matematisk || 0,
         ansvarigId: m.ansvarigId || 0,
       }));
       const resp = await fetch(`${API_BASE_URL}?action=saveAdminTipsrad`, {
@@ -154,7 +244,54 @@ export default function AdminScreen() {
       });
       const json = await resp.json();
       if (json.success) {
-        Alert.alert('Sparat', 'Tipsraden sparad!');
+        if (generateOnSave) {
+          // Also generate system
+          const incomplete = matches.some(m => !m.grundtecken);
+          if (incomplete) {
+            Alert.alert('Sparat', 'Tipsraden sparad!\n\n⚠ System ej skapat – alla 13 måste ha grundtecken.');
+            setHasChanges(false);
+            return;
+          }
+          const sysPayload = matches.map(m => ({
+            matchNr: m.matchNr,
+            tecken: m.grundtecken || '',
+            evGardering: m.evGardering || '',
+            matematisk: m.matematisk || 0,
+          }));
+          const sysResp = await fetch(`${API_BASE_URL}?action=generateSystem`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: user!.id, matches: sysPayload }),
+          });
+          const sysJson = await sysResp.json();
+          if (sysJson.success) {
+            const file = new File(Paths.cache, 'SvenskaSpelRader.txt');
+            file.write(sysJson.fileContent);
+            const fileUri = file.uri;
+            Alert.alert(
+              'Sparat + System skapat!',
+              `${sysJson.antalRader} rader (${sysJson.garantiNiva}-rättsgaranti)`,
+              [
+                { text: 'OK' },
+                {
+                  text: 'Dela fil',
+                  onPress: async () => {
+                    if (await Sharing.isAvailableAsync()) {
+                      await Sharing.shareAsync(fileUri, { mimeType: 'text/plain', dialogTitle: 'SvenskaSpelRader.txt' });
+                    } else {
+                      Alert.alert('Delning ej tillgänglig');
+                    }
+                  },
+                },
+              ]
+            );
+            loadEkonomi();
+          } else {
+            Alert.alert('Sparat', `Tipsraden sparad!\n\n⚠ System-fel: ${sysJson.error || 'Okänt'}`);
+          }
+        } else {
+          Alert.alert('Sparat', 'Tipsraden sparad!');
+        }
         setHasChanges(false);
       } else {
         Alert.alert('Fel', json.error || 'Kunde inte spara');
@@ -208,12 +345,23 @@ export default function AdminScreen() {
 
   const grundradComplete = matches.every(m => m.grundtecken);
   const totalGarderingar = matches.reduce((sum, m) => sum + (m.evGardering?.length || 0), 0);
+  const helgarderingar = matches.filter(m => (m.evGardering?.length || 0) === 2).length;
+  const halvgarderingar = matches.filter(m => (m.evGardering?.length || 0) === 1).length;
+  const antalRader = helgarderingar > 0 || halvgarderingar > 0
+    ? Math.pow(3, helgarderingar) * Math.pow(2, halvgarderingar)
+    : (grundradComplete ? 1 : 0);
 
   return (
+    <KeyboardAvoidingView
+      style={{ flex: 1 }}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+    >
     <ScrollView
       style={styles.container}
       contentContainerStyle={{ paddingBottom: 100 }}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); loadData(); }} />}
+      keyboardShouldPersistTaps="handled"
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); loadData(); loadEkonomi(); }} />}
     >
       {/* Header */}
       <View style={styles.header}>
@@ -240,14 +388,10 @@ export default function AdminScreen() {
       {/* Status summary */}
       <View style={styles.summaryCard}>
         <View style={styles.summaryRow}>
-          <Text style={styles.summaryLabel}>Grundrad:</Text>
-          <Text style={[styles.summaryValue, { color: grundradComplete ? '#1B5E20' : '#D32F2F' }]}>
-            {matches.filter(m => m.grundtecken).length} / 13
+          <Text style={styles.summaryLabel}>Nuv. system</Text>
+          <Text style={styles.summaryValue}>
+            {helgarderingar} hel – {halvgarderingar} halv – {antalRader} rader
           </Text>
-        </View>
-        <View style={styles.summaryRow}>
-          <Text style={styles.summaryLabel}>Garderingar:</Text>
-          <Text style={styles.summaryValue}>{totalGarderingar} tecken</Text>
         </View>
         {hasChanges && (
           <Text style={styles.unsavedText}>⚠ Osparade ändringar</Text>
@@ -256,18 +400,38 @@ export default function AdminScreen() {
 
       {/* Match list */}
       <View style={styles.matchCard}>
+        {/* Panel toggle tabs */}
+        <View style={styles.panelTabs}>
+          <TouchableOpacity
+            style={[styles.panelTab, panelMode === 'grund' && styles.panelTabActive]}
+            onPress={() => setPanelMode('grund')}
+          >
+            <Text style={[styles.panelTabText, panelMode === 'grund' && styles.panelTabTextActive]}>Grundrad</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.panelTab, panelMode === 'gard' && styles.panelTabActive]}
+            onPress={() => setPanelMode('gard')}
+          >
+            <Text style={[styles.panelTabText, panelMode === 'gard' && styles.panelTabTextActive]}>Gardering</Text>
+          </TouchableOpacity>
+        </View>
+
         <View style={styles.colHeader}>
           <Text style={[styles.colHeaderText, { width: 28 }]}>#</Text>
           <Text style={[styles.colHeaderText, { flex: 1 }]}>Match</Text>
-          <Text style={[styles.colHeaderText, { width: 90 }]}>Grund</Text>
-          <Text style={[styles.colHeaderText, { width: 90 }]}>Gard</Text>
-          <Text style={[styles.colHeaderText, { width: 28 }]}>SM</Text>
+          <Text style={[styles.colHeaderText, { width: 90 }]}>
+            {panelMode === 'grund' ? 'Grund' : 'Gard'}
+          </Text>
+          <Text style={[styles.colHeaderText, { width: 28 }]}>
+            {panelMode === 'grund' ? 'SM' : 'Mat.'}
+          </Text>
         </View>
 
         {matches.map((match, idx) => {
           const grund = match.grundtecken;
           const gard = match.evGardering || '';
           const isSTMF = match.poangGrund === 1;
+          const isMat = match.matematisk === 1;
           const hasTips = !!grund;
           const lowestOdds = getLowestOdds(match);
 
@@ -298,82 +462,237 @@ export default function AdminScreen() {
                 )}
               </TouchableOpacity>
 
-              {/* Grundtecken buttons */}
-              <View style={styles.teckenCol}>
-                {(['1', 'X', '2'] as const).map(t => {
-                  const isGrund = grund === t;
-                  return (
-                    <TouchableOpacity
-                      key={t}
-                      style={[styles.teckenBtn, isGrund && styles.teckenBtnGrund]}
-                      onPress={() => toggleGrundtecken(match.matchNr, t)}
-                    >
-                      <Text style={[styles.teckenBtnText, isGrund && styles.teckenBtnTextActive]}>{t}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
+              {panelMode === 'grund' ? (
+                <>
+                  {/* Grundtecken buttons */}
+                  <View style={styles.teckenCol}>
+                    {(['1', 'X', '2'] as const).map(t => {
+                      const isGrund = grund === t;
+                      return (
+                        <TouchableOpacity
+                          key={t}
+                          style={[styles.teckenBtn, isGrund && styles.teckenBtnGrund]}
+                          onPress={() => toggleGrundtecken(match.matchNr, t)}
+                        >
+                          <Text style={[styles.teckenBtnText, isGrund && styles.teckenBtnTextActive]}>{t}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
 
-              {/* Gardering buttons */}
-              <View style={styles.teckenCol}>
-                {(['1', 'X', '2'] as const).map(t => {
-                  const isGrund = grund === t;
-                  const isGard = gard.includes(t);
-                  const gardCount = t === '1' ? match.gard1 : t === 'X' ? match.gardX : match.gard2;
-                  return (
-                    <TouchableOpacity
-                      key={t}
-                      style={[
-                        styles.gardBtn,
-                        isGrund && styles.teckenBtnDisabled,
-                        isGard && styles.teckenBtnGard,
-                      ]}
-                      onPress={() => toggleGardering(match.matchNr, t)}
-                      disabled={isGrund}
-                    >
-                      <Text style={[
-                        styles.gardBtnLabel,
-                        isGrund && styles.teckenBtnTextDisabled,
-                        isGard && styles.gardBtnLabelActive,
-                      ]}>{t}</Text>
-                      <Text style={[
-                        styles.gardBtnCount,
-                        isGrund && styles.teckenBtnTextDisabled,
-                        isGard && styles.gardBtnCountActive,
-                      ]}>{gardCount}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
+                  {/* STMF toggle */}
+                  <TouchableOpacity
+                    style={[styles.stmfBtn, isSTMF && styles.stmfBtnActive]}
+                    onPress={() => toggleSTMF(match.matchNr)}
+                  >
+                    <Text style={[styles.stmfText, isSTMF && styles.stmfTextActive]}>
+                      {isSTMF ? '!' : '·'}
+                    </Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <>
+                  {/* Gardering buttons */}
+                  <View style={styles.teckenCol}>
+                    {(['1', 'X', '2'] as const).map(t => {
+                      const isGrund = grund === t;
+                      const isGard = gard.includes(t);
+                      const gardCount = t === '1' ? match.gard1 : t === 'X' ? match.gardX : match.gard2;
+                      return (
+                        <TouchableOpacity
+                          key={t}
+                          style={[
+                            styles.gardBtn,
+                            isGrund && styles.teckenBtnDisabled,
+                            isGard && styles.teckenBtnGard,
+                          ]}
+                          onPress={() => toggleGardering(match.matchNr, t)}
+                          disabled={isGrund}
+                        >
+                          <Text style={[
+                            styles.gardBtnLabel,
+                            isGrund && styles.teckenBtnTextDisabled,
+                            isGard && styles.gardBtnLabelActive,
+                          ]}>{t}</Text>
+                          <Text style={[
+                            styles.gardBtnCount,
+                            isGrund && styles.teckenBtnTextDisabled,
+                            isGard && styles.gardBtnCountActive,
+                          ]}>{gardCount}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
 
-              {/* STMF toggle */}
-              <TouchableOpacity
-                style={[styles.stmfBtn, isSTMF && styles.stmfBtnActive]}
-                onPress={() => toggleSTMF(match.matchNr)}
-              >
-                <Text style={[styles.stmfText, isSTMF && styles.stmfTextActive]}>
-                  {isSTMF ? '!' : '·'}
-                </Text>
-              </TouchableOpacity>
+                  {/* Matematisk toggle */}
+                  <TouchableOpacity
+                    style={[styles.stmfBtn, isMat && styles.matBtnActive]}
+                    onPress={() => toggleMatematisk(match.matchNr)}
+                  >
+                    <Text style={[styles.matText, isMat && styles.stmfTextActive]}>
+                      {isMat ? 'M' : ''}
+                    </Text>
+                  </TouchableOpacity>
+                </>
+              )}
             </View>
           );
         })}
       </View>
 
-      {/* Save button */}
-      <TouchableOpacity
-        style={[styles.saveBtn, !hasChanges && styles.saveBtnDisabled]}
-        onPress={handleSave}
-        disabled={!hasChanges || saving}
-      >
-        {saving ? (
-          <ActivityIndicator color="#fff" />
+      {/* Save row with checkbox */}
+      <View style={styles.saveRow}>
+        <TouchableOpacity
+          style={[styles.saveBtn, !hasChanges && styles.saveBtnDisabled]}
+          onPress={handleSave}
+          disabled={!hasChanges || saving}
+        >
+          {saving ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.saveBtnText}>
+              {hasChanges ? 'Spara' : 'Inga ändringar'}
+            </Text>
+          )}
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.genCheckRow}
+          onPress={() => setGenerateOnSave(!generateOnSave)}
+          activeOpacity={0.7}
+        >
+          <View style={[styles.genCheckbox, generateOnSave && styles.genCheckboxActive]}>
+            {generateOnSave && <Text style={styles.genCheckmark}>✓</Text>}
+          </View>
+          <Text style={styles.genCheckLabel}>Skapa system</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* ===== EKONOMI SECTION ===== */}
+      <View style={styles.ekoSection}>
+        <Text style={styles.ekoTitle}>💰 Ekonomi</Text>
+        <Text style={styles.ekoSubtitle}>Omgång {ekonomi?.spelomgang || data.spelomgang}</Text>
+
+        {ekoLoading ? (
+          <ActivityIndicator color="#1B5E20" style={{ marginVertical: 16 }} />
+        ) : ekonomi ? (
+          <>
+            {/* Säsong (read-only) */}
+            <View style={styles.ekoRow}>
+              <Text style={styles.ekoLabel}>Säsong</Text>
+              <Text style={styles.ekoReadOnly}>{ekonomi.sasong}</Text>
+            </View>
+
+            {/* Antal rätt */}
+            <View style={styles.ekoRow}>
+              <Text style={styles.ekoLabel}>Antal rätt</Text>
+              <TextInput
+                style={styles.ekoInput}
+                value={String(ekonomi.antalRatt || 0)}
+                onChangeText={v => updateEkonomi('antalRatt', v)}
+                keyboardType="numeric"
+              />
+            </View>
+
+            {/* Veckans kapital */}
+            <View style={styles.ekoRow}>
+              <Text style={styles.ekoLabel}>Veckans kapital</Text>
+              <TextInput
+                style={styles.ekoInput}
+                value={String(ekonomi.veckansKapital || 260)}
+                onChangeText={v => updateEkonomi('veckansKapital', v)}
+                keyboardType="numeric"
+              />
+            </View>
+
+            {/* Insats */}
+            <View style={styles.ekoRow}>
+              <Text style={styles.ekoLabel}>Insats (rader: {ekonomi.antalRader})</Text>
+              <TextInput
+                style={styles.ekoInput}
+                value={String(ekonomi.insats || 0)}
+                onChangeText={v => updateEkonomi('insats', v)}
+                keyboardType="numeric"
+              />
+            </View>
+
+            {/* Vinst */}
+            <View style={styles.ekoRow}>
+              <Text style={styles.ekoLabel}>Vinst</Text>
+              <TextInput
+                style={styles.ekoInput}
+                value={String(ekonomi.vinst || 0)}
+                onChangeText={v => updateEkonomi('vinst', v)}
+                keyboardType="numeric"
+              />
+            </View>
+
+            {/* Slutspel */}
+            <View style={styles.ekoRow}>
+              <Text style={styles.ekoLabel}>Slutspelsomgång</Text>
+              <Switch
+                value={ekonomi.isSlutspel === 1}
+                onValueChange={v => updateEkonomi('isSlutspel', v ? 1 : 0)}
+                trackColor={{ false: '#ccc', true: '#81C784' }}
+                thumbColor={ekonomi.isSlutspel === 1 ? '#1B5E20' : '#999'}
+              />
+            </View>
+
+            {/* Extra insats */}
+            <View style={styles.ekoRow}>
+              <Text style={styles.ekoLabel}>Extra insats</Text>
+              <TextInput
+                style={styles.ekoInput}
+                value={String(ekonomi.extraInsats || 0)}
+                onChangeText={v => updateEkonomi('extraInsats', v)}
+                keyboardType="numeric"
+              />
+            </View>
+
+            {/* Extra vinst */}
+            <View style={styles.ekoRow}>
+              <Text style={styles.ekoLabel}>Extra vinst</Text>
+              <TextInput
+                style={styles.ekoInput}
+                value={String(ekonomi.extraVinst || 0)}
+                onChangeText={v => updateEkonomi('extraVinst', v)}
+                keyboardType="numeric"
+              />
+            </View>
+
+            {/* Utdelning */}
+            <View style={styles.ekoRow}>
+              <Text style={styles.ekoLabel}>Utdelning</Text>
+              <TextInput
+                style={styles.ekoInput}
+                value={String(ekonomi.utdelning || 0)}
+                onChangeText={v => updateEkonomi('utdelning', v)}
+                keyboardType="numeric"
+              />
+            </View>
+
+            {/* Kommentar */}
+            <View style={styles.ekoRow}>
+              <Text style={styles.ekoLabel}>Kommentar</Text>
+              <TextInput
+                style={[styles.ekoInput, { flex: 1 }]}
+                value={ekonomi.kommentar}
+                onChangeText={v => updateEkonomi('kommentar', v)}
+              />
+            </View>
+
+            {/* Spara ekonomi button */}
+            <TouchableOpacity style={styles.ekoSaveBtn} onPress={saveEkonomi} disabled={ekoSaving}>
+              {ekoSaving ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.ekoSaveBtnText}>Spara ekonomi</Text>
+              )}
+            </TouchableOpacity>
+          </>
         ) : (
-          <Text style={styles.saveBtnText}>
-            {hasChanges ? 'Spara ändringar' : 'Inga ändringar'}
-          </Text>
+          <Text style={styles.ekoNoData}>Ingen ekonomidata tillgänglig</Text>
         )}
-      </TouchableOpacity>
+      </View>
 
       {/* Analysis Modal */}
       <Modal visible={analysisModal.visible} transparent animationType="slide">
@@ -450,6 +769,7 @@ export default function AdminScreen() {
         </View>
       </Modal>
     </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -495,6 +815,16 @@ const styles = StyleSheet.create({
     paddingVertical: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.08, shadowRadius: 6, elevation: 3,
   },
+  panelTabs: {
+    flexDirection: 'row', marginHorizontal: 8, marginTop: 4, marginBottom: 8,
+    backgroundColor: '#F0F0F0', borderRadius: 8, padding: 3,
+  },
+  panelTab: {
+    flex: 1, paddingVertical: 7, borderRadius: 6, alignItems: 'center',
+  },
+  panelTabActive: { backgroundColor: '#fff', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 2, elevation: 2 },
+  panelTabText: { fontSize: 13, fontWeight: '600', color: '#999' },
+  panelTabTextActive: { color: '#1B5E20' },
   colHeader: {
     flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8,
     paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: '#E0E0E0',
@@ -542,16 +872,30 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center', marginLeft: 4,
   },
   stmfBtnActive: { backgroundColor: '#D32F2F', borderColor: '#D32F2F' },
+  matBtnActive: { backgroundColor: '#7B1FA2', borderColor: '#7B1FA2' },
+  matText: { fontSize: 11, fontWeight: '700', color: '#ccc' },
   stmfText: { fontSize: 14, fontWeight: '700', color: '#ccc' },
   stmfTextActive: { color: '#fff' },
 
+  saveRow: {
+    flexDirection: 'row', alignItems: 'center', marginHorizontal: 16, gap: 12,
+  },
   saveBtn: {
-    backgroundColor: '#1B5E20', borderRadius: 12, padding: 16, marginHorizontal: 16,
+    flex: 1, backgroundColor: '#1B5E20', borderRadius: 12, padding: 14,
     alignItems: 'center', shadowColor: '#1B5E20', shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3, shadowRadius: 8, elevation: 6,
   },
   saveBtnDisabled: { backgroundColor: '#BDBDBD', shadowOpacity: 0, elevation: 0 },
-  saveBtnText: { color: '#fff', fontSize: 17, fontWeight: '700' },
+  saveBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
+
+  genCheckRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  genCheckbox: {
+    width: 22, height: 22, borderRadius: 4, borderWidth: 2, borderColor: '#999',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  genCheckboxActive: { backgroundColor: '#E65100', borderColor: '#E65100' },
+  genCheckmark: { color: '#fff', fontSize: 14, fontWeight: '700' },
+  genCheckLabel: { fontSize: 12, color: '#666', fontWeight: '500' },
 
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   modalContent: {
@@ -581,4 +925,30 @@ const styles = StyleSheet.create({
   standingsRow: { flexDirection: 'row', paddingVertical: 5 },
   standingsHighlight: { backgroundColor: '#E8F5E9' },
   sCell: { fontSize: 11, color: '#333', textAlign: 'center' },
+
+  // Ekonomi styles
+  ekoSection: {
+    backgroundColor: '#fff', borderRadius: 12, marginHorizontal: 16, marginTop: 24, marginBottom: 16,
+    padding: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08, shadowRadius: 6, elevation: 3,
+  },
+  ekoTitle: { fontSize: 18, fontWeight: '800', color: '#1B5E20', textAlign: 'center' },
+  ekoSubtitle: { fontSize: 13, color: '#666', textAlign: 'center', marginBottom: 16 },
+  ekoRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F0F0F0',
+  },
+  ekoLabel: { fontSize: 14, color: '#333', fontWeight: '500', flex: 1 },
+  ekoReadOnly: { fontSize: 14, fontWeight: '700', color: '#666', paddingHorizontal: 12, paddingVertical: 6 },
+  ekoInput: {
+    fontSize: 14, fontWeight: '600', color: '#333', backgroundColor: '#F5F5F5',
+    borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, minWidth: 80, textAlign: 'right',
+    borderWidth: 1, borderColor: '#E0E0E0',
+  },
+  ekoSaveBtn: {
+    backgroundColor: '#1565C0', borderRadius: 10, padding: 14,
+    alignItems: 'center', marginTop: 20,
+  },
+  ekoSaveBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  ekoNoData: { fontSize: 14, color: '#999', textAlign: 'center', marginVertical: 16 },
 });

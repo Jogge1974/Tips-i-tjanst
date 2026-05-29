@@ -256,6 +256,77 @@ export default function LiveScreen() {
 
   const winnings = calculateWinnings();
 
+  // Check if any match has started
+  const startedEvents = draw.events.filter(e => e.sportEventStatus !== 'Inte startat');
+  const noneStarted = startedEvents.length === 0;
+
+  // System description (hel/halv/garanti)
+  const getSystemDescription = (): string => {
+    if (!rows.length) return '';
+    let hel = 0, halv = 0;
+    const signCounts: number[] = [];
+    for (let i = 1; i <= 13; i++) {
+      const signs = new Set(rows.map(r => (r as any)[`m${i}`]));
+      signCounts.push(signs.size);
+      if (signs.size === 3) hel++;
+      else if (signs.size === 2) halv++;
+    }
+
+    // Replicate smartReduce group logic
+    const variablePositions = signCounts
+      .map((cnt, idx) => ({ idx, cnt }))
+      .filter(x => x.cnt > 1)
+      .sort((a, b) => b.cnt - a.cnt);
+
+    let garanti = 13;
+    if (variablePositions.length > 0) {
+      let variabelMat = 1;
+      for (const v of variablePositions) variabelMat *= v.cnt;
+
+      if (variabelMat <= 243) {
+        garanti = 12;
+      } else {
+        let antalGrupper = 4;
+        for (let tryGroups = 2; tryGroups <= 4; tryGroups++) {
+          const testGroupMat = new Array(tryGroups).fill(1);
+          for (let i = 0; i < variablePositions.length; i++)
+            testGroupMat[i % tryGroups] *= variablePositions[i].cnt;
+          if (testGroupMat.every(m => m <= 243)) {
+            antalGrupper = tryGroups;
+            break;
+          }
+        }
+        garanti = 13 - antalGrupper;
+      }
+    }
+
+    return `${hel} hel – ${halv} halv – ${rows.length} rader (${garanti}-rättsgaranti)`;
+  };
+
+  const systemDesc = getSystemDescription();
+
+  // Countdown to first match
+  const getFirstMatchCountdown = (): string => {
+    if (!noneStarted) return '';
+    const starts = draw.events
+      .map(e => new Date(e.sportEventStart).getTime())
+      .filter(t => t > Date.now())
+      .sort((a, b) => a - b);
+    if (!starts.length) return '';
+    const diff = starts[0] - Date.now();
+    const hours = Math.floor(diff / (1000 * 60 * 60));
+    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+    if (hours >= 24) {
+      const days = Math.floor(hours / 24);
+      const remH = hours % 24;
+      return `${days}d ${remH}h`;
+    }
+    if (hours > 0) return `${hours}h ${minutes}min`;
+    return `${minutes} min`;
+  };
+
+  const firstMatchCountdown = getFirstMatchCountdown();
+
   // Parse distribution amounts for display
   const getDistAmount = (numRight: number): string => {
     if (!draw?.distribution) return '-';
@@ -272,7 +343,7 @@ export default function LiveScreen() {
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
     >
       {/* Kompakt header - klickbar för expand */}
-      {rows.length > 0 && (
+      {rows.length > 0 && !noneStarted && (
         <TouchableOpacity
           style={styles.headerRow}
           onPress={() => setHeaderExpanded(!headerExpanded)}
@@ -299,8 +370,36 @@ export default function LiveScreen() {
         </TouchableOpacity>
       )}
 
-      {/* Tabb-väljare - visa bara om vi har rader */}
-      {rows.length > 0 ? (
+      {/* Waiting hero - before matches start */}
+      {noneStarted && (
+        <View style={styles.waitingHero}>
+          <Text style={styles.waitingHeroEmoji}>⚽</Text>
+          <Text style={styles.waitingHeroTitle}>
+            {draw.drawComment || `Omgång ${draw.drawNumber}`}
+          </Text>
+          {firstMatchCountdown ? (
+            <View style={styles.countdownRow}>
+              <Text style={styles.countdownLabel}>Första match om</Text>
+              <Text style={styles.countdownValue}>{firstMatchCountdown}</Text>
+            </View>
+          ) : (
+            <Text style={styles.waitingHeroSub}>Matchstart snart!</Text>
+          )}
+          {rows.length > 0 && (
+            <View style={styles.startingRattRow}>
+              <Text style={styles.startingRattLabel}>Startar med</Text>
+              <Text style={styles.startingRattValue}>{bestRow ? bestRow.correct : 0} rätt</Text>
+              <Text style={styles.startingRattSub}>(alla matcher 0-0 = X)</Text>
+            </View>
+          )}
+          {rows.length > 0 && (
+            <Text style={styles.systemDescText}>{systemDesc}</Text>
+          )}
+        </View>
+      )}
+
+      {/* Tabb-väljare - visa bara om vi har rader och matches live */}
+      {rows.length > 0 && !noneStarted ? (
       <View style={styles.tabBar}>
         <TouchableOpacity
           style={[styles.tab, activeTab === 'kupong' && styles.tabActive]}
@@ -315,10 +414,14 @@ export default function LiveScreen() {
           <Text style={[styles.tabText, activeTab === 'rader' && styles.tabTextActive]}>Bästa enkelrad</Text>
         </TouchableOpacity>
       </View>
-      ) : (
+      ) : !noneStarted ? (
         <View style={styles.upcomingHeader}>
           <Text style={styles.upcomingTitle}>{draw.drawComment || `Omgång ${draw.drawNumber}`}</Text>
           <Text style={styles.upcomingSubtitle}>Veckans kupong</Text>
+        </View>
+      ) : (
+        <View style={styles.upcomingHeader}>
+          <Text style={styles.upcomingTitle}>Veckans kupong</Text>
         </View>
       )}
 
@@ -659,6 +762,32 @@ const styles = StyleSheet.create({
     color: '#666',
     marginTop: 2,
   },
+  waitingHero: {
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    padding: 24,
+    alignItems: 'center',
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#E8F5E9',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  waitingHeroEmoji: { fontSize: 40, marginBottom: 8 },
+  waitingHeroTitle: { fontSize: 20, fontWeight: '700', color: '#333', marginBottom: 8 },
+  waitingHeroSub: { fontSize: 14, color: '#888' },
+  waitingHeroRader: { fontSize: 12, color: '#999', marginTop: 8 },
+  systemDescText: { fontSize: 13, fontWeight: '500', color: '#888', marginTop: 12, textAlign: 'center' },
+  startingRattRow: { alignItems: 'center', marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#f0f0f0', width: '100%' },
+  startingRattLabel: { fontSize: 13, color: '#666' },
+  startingRattValue: { fontSize: 28, fontWeight: '800', color: '#1B5E20', marginVertical: 2 },
+  startingRattSub: { fontSize: 11, color: '#aaa' },
+  countdownRow: { flexDirection: 'row', alignItems: 'baseline', gap: 8 },
+  countdownLabel: { fontSize: 14, color: '#666' },
+  countdownValue: { fontSize: 22, fontWeight: '800', color: '#1B5E20' },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -812,10 +941,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   signBoxCovered: {
-    backgroundColor: '#C8E6C9',
+    backgroundColor: '#1B5E20',
   },
   signBoxUncovered: {
-    backgroundColor: '#e0e0e0',
+    backgroundColor: '#F5F5F5',
   },
   signBoxNeutral: {
     backgroundColor: '#f5f5f5',
@@ -827,10 +956,10 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   signBoxTextCovered: {
-    color: '#1B5E20',
+    color: '#fff',
   },
   signBoxTextUncovered: {
-    color: '#999',
+    color: '#ccc',
   },
   signBoxTextNeutral: {
     color: '#666',

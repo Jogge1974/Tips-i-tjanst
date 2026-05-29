@@ -12,72 +12,73 @@ import {
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
-import { api, GameStatus } from '../services/api';
+import { api } from '../services/api';
+
+interface DashboardData {
+  status: { speletOppet: number; spelomgang: string; isSlutspel: number; antalRatt: number };
+  seasonEconomy: { totalInsats: number; totalVinst: number; balance: number; sasong: number };
+  leader: { namn: string; poang: number } | null;
+  myPosition: number | null;
+  myPoang: number | null;
+  slutspelsInfo: string;
+  lastResult: { spelomgang: string; antalRatt: number; vinst: number } | null;
+  streak: number;
+  hasTipped: boolean;
+  hasGardering: boolean;
+  liveState: 'waiting' | 'live' | 'finished';
+}
+
+function getCountdown(speletOppet: number): string {
+  const now = new Date();
+  const swe = new Date(now.getTime() + 2 * 60 * 60 * 1000); // UTC+2
+  let target: Date;
+
+  if (speletOppet === 1) {
+    // Tips open → deadline Thursday 12:00
+    target = new Date(swe);
+    const day = target.getDay();
+    let daysToThu = (4 - day + 7) % 7;
+    if (daysToThu === 0 && target.getHours() >= 12) daysToThu = 7;
+    target.setDate(target.getDate() + daysToThu);
+    target.setHours(12, 0, 0, 0);
+  } else if (speletOppet === 2) {
+    // Gardering open → deadline Friday 12:00
+    target = new Date(swe);
+    const day = target.getDay();
+    let daysToFri = (5 - day + 7) % 7;
+    if (daysToFri === 0 && target.getHours() >= 12) daysToFri = 7;
+    target.setDate(target.getDate() + daysToFri);
+    target.setHours(12, 0, 0, 0);
+  } else {
+    return '';
+  }
+
+  const diff = target.getTime() - swe.getTime();
+  if (diff <= 0) return '';
+  const hours = Math.floor(diff / (1000 * 60 * 60));
+  const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+  if (hours >= 24) {
+    const days = Math.floor(hours / 24);
+    const remHours = hours % 24;
+    return `${days}d ${remHours}h`;
+  }
+  return `${hours}h ${minutes}min`;
+}
 
 export default function HomeScreen() {
   const { user } = useAuth();
   const navigation = useNavigation<any>();
-  const [status, setStatus] = useState<GameStatus | null>(null);
-  const [hasTipped, setHasTipped] = useState(false);
-  const [hasGardering, setHasGardering] = useState(false);
-  const [liveData, setLiveData] = useState<any>(null);
-  const [myPosition, setMyPosition] = useState<number | null>(null);
-  const [totalPlayers, setTotalPlayers] = useState<number>(0);
-  const [myPoang, setMyPoang] = useState<number | null>(null);
-  const [slutspelsInfo, setSlutspelsInfo] = useState<string>('');
+  const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   const fetchData = useCallback(async () => {
     if (!user) return;
     try {
-      const [statusData, allsvenskanData, myMatch, garderingar, live] = await Promise.all([
-        api.getStatus(),
-        api.getTipsAllsvenskan(user.id),
-        api.getMyMatch(user.id),
-        api.getGarderingar(user.id),
-        api.getLiveDraw(),
-      ]);
-      setStatus(statusData);
-      setLiveData(live);
-
-      // Check if user has tipped
-      if (myMatch && (myMatch.etta === '1' || myMatch.kryss === '1' || myMatch.tvaa === '1')) {
-        setHasTipped(true);
-      } else {
-        setHasTipped(false);
-      }
-
-      // Check if user has saved garderingar
-      setHasGardering(Array.isArray(garderingar) && garderingar.length > 0);
-
-      // TipsAllsvenskan position
-      setMyPosition(allsvenskanData.myPosition);
-      setTotalPlayers(allsvenskanData.standings?.length || 0);
-      const standings = allsvenskanData.standings || [];
-      const myEntry = standings.find((s: any) => s.id === user.id);
-      setMyPoang(myEntry ? myEntry.poang : null);
-
-      const pos = allsvenskanData.myPosition;
-      if (pos && myEntry && standings.length >= 8) {
-        if (pos <= 8) {
-          const ninthEntry = standings[8];
-          if (ninthEntry) {
-            const diff = (myEntry.poang - ninthEntry.poang).toFixed(1);
-            setSlutspelsInfo(`${diff}p ner till plats 9`);
-          } else {
-            setSlutspelsInfo('Slutspelsplats!');
-          }
-        } else {
-          const eighthEntry = standings[7];
-          if (eighthEntry) {
-            const diff = (eighthEntry.poang - myEntry.poang).toFixed(1);
-            setSlutspelsInfo(`${diff}p upp till plats 8`);
-          }
-        }
-      }
+      const dashboard = await api.getDashboard(user.id);
+      setData(dashboard);
     } catch (e) {
-      console.error('Home fetch error:', e);
+      console.error('Dashboard fetch error:', e);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -103,143 +104,104 @@ export default function HomeScreen() {
     );
   }
 
-  // Determine which card to show
-  const renderStatusCard = () => {
-    if (!status) return null;
+  if (!data) return null;
 
-    // A. Game is open (speletOppet = 1 or 2)
-    if (status.speletOppet === 1 || status.speletOppet === 2) {
-      const tipsActive = status.speletOppet === 1;
-      const garderingActive = status.speletOppet === 2;
-      const garderingLabel = status.isSlutspel ? 'Lämna enkelrad' : 'Lämna garderingar';
+  const { status, seasonEconomy, leader, myPosition, myPoang, slutspelsInfo, lastResult, streak, hasTipped, hasGardering, liveState } = data;
+  const countdown = getCountdown(status.speletOppet);
 
+  const renderStatusBanner = () => {
+    if (status.speletOppet === 1) {
       return (
         <TouchableOpacity
-          style={styles.taskCard}
+          style={[styles.statusBanner, hasTipped ? styles.bannerDone : styles.bannerActive]}
           onPress={() => navigation.navigate('MinSida')}
           activeOpacity={0.8}
         >
-          <Text style={styles.taskHeader}>Veckans uppgifter</Text>
-          <Text style={styles.taskRound}>Omgång {status.spelomgang}</Text>
-
-          {/* Task 1: Lämna tips */}
-          <View style={[styles.taskRow, !tipsActive && styles.taskRowDisabled]}>
-            <View style={[styles.taskIcon, hasTipped && styles.taskIconDone]}>
-              {hasTipped ? (
-                <Ionicons name="checkmark" size={18} color="#fff" />
-              ) : (
-                <Ionicons name="ellipse-outline" size={18} color={tipsActive ? '#1B5E20' : '#ccc'} />
-              )}
-            </View>
-            <View style={styles.taskTextContainer}>
-              <Text style={[styles.taskLabel, !tipsActive && styles.taskLabelDisabled]}>
-                Lämna tips
-              </Text>
-              <Text style={styles.taskDescription}>
-                {hasTipped ? 'Tipstecken lämnat ✓' : tipsActive ? 'Lämna ditt tipstecken' : 'Öppnar tisdag'}
-              </Text>
-            </View>
-            {tipsActive && !hasTipped && (
-              <Ionicons name="chevron-forward" size={20} color="#1B5E20" />
-            )}
+          <View style={styles.bannerLeft}>
+            <Ionicons
+              name={hasTipped ? 'checkmark-circle' : 'pencil'}
+              size={28}
+              color="#fff"
+            />
           </View>
-
-          {/* Task 2: Lämna garderingar/enkelrad */}
-          <View style={[styles.taskRow, !garderingActive && styles.taskRowDisabled]}>
-            <View style={[styles.taskIcon, hasGardering && styles.taskIconDone]}>
-              {hasGardering ? (
-                <Ionicons name="checkmark" size={18} color="#fff" />
-              ) : (
-                <Ionicons name="ellipse-outline" size={18} color={garderingActive ? '#1B5E20' : '#ccc'} />
-              )}
-            </View>
-            <View style={styles.taskTextContainer}>
-              <Text style={[styles.taskLabel, !garderingActive && styles.taskLabelDisabled]}>
-                {garderingLabel}
-              </Text>
-              <Text style={styles.taskDescription}>
-                {hasGardering ? 'Garderingar sparade ✓' : garderingActive ? 'Lämna före fredag kl 12' : 'Öppnar torsdag kl 12'}
-              </Text>
-            </View>
-            {garderingActive && !hasGardering && (
-              <Ionicons name="chevron-forward" size={20} color="#1B5E20" />
-            )}
+          <View style={styles.bannerContent}>
+            <Text style={styles.bannerTitle}>
+              {hasTipped ? 'Tips lämnat ✓' : 'Lämna ditt tips'}
+            </Text>
+            <Text style={styles.bannerSub}>
+              {hasTipped ? `Omgång ${status.spelomgang}` : `Spelstopp om ${countdown}`}
+            </Text>
           </View>
-
-          <Text style={styles.taskFooter}>Tryck för att gå till Min sida →</Text>
+          {!hasTipped && <Ionicons name="chevron-forward" size={24} color="#fff" />}
         </TouchableOpacity>
       );
     }
 
-    // B, C, D: speletOppet === 0
-    if (status.speletOppet === 0 && liveData) {
-      const events = liveData.events || [];
-      const started = events.filter((e: any) => e.sportEventStatus !== 'Inte startat');
-      const finished = events.filter((e: any) =>
-        e.sportEventStatus === 'Slut' || e.sportEventStatus === 'Avslutad'
-      );
-      const allFinished = finished.length === 13;
-      const noneStarted = started.length === 0;
-
-      // B. All matches finished - show result
-      if (allFinished) {
-        return (
-          <TouchableOpacity
-            style={styles.resultCard}
-            onPress={() => navigation.navigate('Live')}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="trophy" size={48} color="#FFD700" style={styles.resultIcon} />
-            <Text style={styles.resultTitle}>Omgång {status.spelomgang} avgjord</Text>
-            <Text style={styles.resultRatt}>{status.antalRatt} rätt</Text>
-            {liveData.distribution && liveData.distribution.length > 0 && (
-              <Text style={styles.resultVinst}>
-                Se resultat och eventuell vinst
-              </Text>
-            )}
-            <Text style={styles.taskFooter}>Tryck för detaljer →</Text>
-          </TouchableOpacity>
-        );
-      }
-
-      // C. No matches started
-      if (noneStarted) {
-        return (
-          <TouchableOpacity
-            style={styles.waitingCard}
-            onPress={() => navigation.navigate('Live')}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="time-outline" size={48} color="#1B5E20" style={styles.resultIcon} />
-            <Text style={styles.waitingTitle}>Vi väntar på att Stryktipset ska starta</Text>
-            <Text style={styles.waitingSubtitle}>Omgång {status.spelomgang}</Text>
-            <Text style={styles.taskFooter}>Tryck för att se kupongen →</Text>
-          </TouchableOpacity>
-        );
-      }
-
-      // D. At least one match started (live)
+    if (status.speletOppet === 2) {
+      const label = status.isSlutspel ? 'Lämna enkelrad' : 'Lämna garderingar';
       return (
         <TouchableOpacity
-          style={styles.liveCard}
+          style={[styles.statusBanner, hasGardering ? styles.bannerDone : styles.bannerGardering]}
+          onPress={() => navigation.navigate('MinSida')}
+          activeOpacity={0.8}
+        >
+          <View style={styles.bannerLeft}>
+            <Ionicons
+              name={hasGardering ? 'checkmark-circle' : 'layers'}
+              size={28}
+              color="#fff"
+            />
+          </View>
+          <View style={styles.bannerContent}>
+            <Text style={styles.bannerTitle}>
+              {hasGardering ? 'Garderingar sparade ✓' : label}
+            </Text>
+            <Text style={styles.bannerSub}>
+              {hasGardering ? `Omgång ${status.spelomgang}` : `Stänger om ${countdown}`}
+            </Text>
+          </View>
+          {!hasGardering && <Ionicons name="chevron-forward" size={24} color="#fff" />}
+        </TouchableOpacity>
+      );
+    }
+
+    // Game closed
+    if (liveState === 'live') {
+      return (
+        <TouchableOpacity
+          style={[styles.statusBanner, styles.bannerLive]}
           onPress={() => navigation.navigate('Live')}
           activeOpacity={0.8}
         >
-          <View style={styles.liveBadge}>
+          <View style={styles.bannerLeft}>
             <View style={styles.liveDot} />
-            <Text style={styles.liveBadgeText}>LIVE</Text>
           </View>
-          <Text style={styles.liveTitle}>Stryktipset är LIVE</Text>
-          <Text style={styles.liveSubtitle}>Följ spelet här</Text>
-          <Text style={styles.liveProgress}>
-            {finished.length} av 13 matcher klara
-          </Text>
-          <Text style={styles.taskFooter}>Tryck för att följa live →</Text>
+          <View style={styles.bannerContent}>
+            <Text style={styles.bannerTitle}>Stryktipset är LIVE</Text>
+            <Text style={styles.bannerSub}>Följ matcherna i realtid</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={24} color="#fff" />
         </TouchableOpacity>
       );
     }
 
-    return null;
+    // Waiting or finished
+    return (
+      <TouchableOpacity
+        style={[styles.statusBanner, styles.bannerWaiting]}
+        onPress={() => navigation.navigate('Live')}
+        activeOpacity={0.8}
+      >
+        <View style={styles.bannerLeft}>
+          <Ionicons name="football-outline" size={28} color="#1B5E20" />
+        </View>
+        <View style={styles.bannerContent}>
+          <Text style={styles.bannerTitleDark}>Veckans rad är publicerad</Text>
+          <Text style={styles.bannerSubDark}>Omgång {status.spelomgang} – Se kupongen</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={24} color="#1B5E20" />
+      </TouchableOpacity>
+    );
   };
 
   return (
@@ -248,288 +210,168 @@ export default function HomeScreen() {
       contentContainerStyle={styles.content}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
     >
-      {/* Hero header */}
+      {/* Logo */}
       <View style={styles.heroCard}>
-        <Image source={require('../../assets/logga_transparent.png')} style={styles.heroLogoImg} resizeMode="contain" />
+        <Image
+          source={require('../../assets/logga_transparent.png')}
+          style={styles.heroLogoImg}
+          resizeMode="contain"
+        />
       </View>
 
-      {/* Dynamic status card */}
-      {renderStatusCard()}
+      {/* Status banner */}
+      {renderStatusBanner()}
 
-      {/* TipsAllsvenskan position card */}
-      {myPosition && (
+      {/* Dashboard grid */}
+      <View style={styles.grid}>
+        {/* Season Economy */}
+        <View style={styles.card}>
+          <Text style={styles.cardLabel}>Säsong {seasonEconomy.sasong}</Text>
+          <Text style={[
+            styles.cardValue,
+            seasonEconomy.balance >= 0 ? styles.positive : styles.negative,
+          ]}>
+            {seasonEconomy.balance >= 0 ? '+' : ''}{seasonEconomy.balance} kr
+          </Text>
+          <View style={styles.ecoRow}>
+            <Text style={styles.ecoDetail}>Insats: {seasonEconomy.totalInsats} kr</Text>
+            <Text style={styles.ecoDetail}>Vinst: {seasonEconomy.totalVinst} kr</Text>
+          </View>
+        </View>
+
+        {/* TipsAllsvenskan */}
         <TouchableOpacity
-          style={styles.positionCard}
+          style={styles.card}
           onPress={() => navigation.navigate('TipsAllsvenskan')}
           activeOpacity={0.8}
         >
-          <Text style={styles.positionIcon}>🏆</Text>
-          <Text style={styles.positionRank}>Plats {myPosition} av {totalPlayers}</Text>
+          <Text style={styles.cardLabel}>TipsAllsvenskan</Text>
+          {myPosition && (
+            <Text style={styles.cardValue}>Plats {myPosition}</Text>
+          )}
           {myPoang !== null && (
-            <Text style={styles.positionPoints}>{myPoang.toFixed(1)} poäng</Text>
+            <Text style={styles.cardPoints}>{myPoang.toFixed(1)} poäng</Text>
           )}
           {slutspelsInfo !== '' && (
-            <Text style={styles.slutspelsText}>{slutspelsInfo}</Text>
+            <Text style={styles.cardMeta}>{slutspelsInfo}</Text>
           )}
-          <Text style={styles.positionArrow}>Visa tabell →</Text>
+          {leader && (
+            <View style={styles.leaderRow}>
+              <Ionicons name="trophy" size={14} color="#FFD700" />
+              <Text style={styles.leaderText}>{leader.namn} ({leader.poang.toFixed(1)}p)</Text>
+            </View>
+          )}
         </TouchableOpacity>
+      </View>
+
+      {/* Last result + streak row */}
+      {(lastResult || streak > 0) && (
+        <View style={styles.grid}>
+          {lastResult && (
+            <View style={styles.cardSmall}>
+              <Text style={styles.cardLabel}>Senaste resultat</Text>
+              <Text style={styles.cardValueMd}>{lastResult.antalRatt} rätt</Text>
+              {lastResult.vinst > 0 && (
+                <Text style={styles.positive}>{lastResult.vinst} kr vinst</Text>
+              )}
+              <Text style={styles.cardMeta}>Omgång {lastResult.spelomgang}</Text>
+            </View>
+          )}
+
+          {streak > 0 && (
+            <View style={styles.cardSmall}>
+              <Text style={styles.cardLabel}>Streak 🔥</Text>
+              <Text style={styles.cardValueMd}>{streak} omgångar</Text>
+              <Text style={styles.cardMeta}>i rad med 10+ rätt</Text>
+            </View>
+          )}
+        </View>
       )}
 
       {/* Footer */}
-      <Text style={styles.footerText}>Inloggad som: {user?.fornamn} {user?.efternamn}</Text>
+      <Text style={styles.footerText}>
+        Inloggad som: {user?.fornamn} {user?.efternamn}
+      </Text>
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f0f0f0',
-  },
-  content: {
-    padding: 20,
-    paddingBottom: 40,
-  },
-  center: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  heroCard: {
-    alignItems: 'center',
-    marginBottom: 20,
-    paddingVertical: 20,
-  },
-  heroLogoImg: {
-    width: 280,
-    height: 120,
-  },
+  container: { flex: 1, backgroundColor: '#f0f0f0' },
+  content: { padding: 16, paddingBottom: 40 },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
 
-  // Task card (A)
-  taskCard: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 24,
-    marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.12,
-    shadowRadius: 10,
-    elevation: 5,
-  },
-  taskHeader: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#1B5E20',
-    marginBottom: 4,
-  },
-  taskRound: {
-    fontSize: 13,
-    color: '#888',
+  heroCard: { alignItems: 'center', marginBottom: 16, paddingVertical: 12 },
+  heroLogoImg: { width: 240, height: 100 },
+
+  // Status banner
+  statusBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 14,
+    padding: 16,
     marginBottom: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 5,
   },
-  taskRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 14,
-    borderTopWidth: 1,
-    borderTopColor: '#f0f0f0',
-  },
-  taskRowDisabled: {
-    opacity: 0.45,
-  },
-  taskIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    borderWidth: 2,
-    borderColor: '#1B5E20',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 14,
-  },
-  taskIconDone: {
-    backgroundColor: '#1B5E20',
-    borderColor: '#1B5E20',
-  },
-  taskTextContainer: {
+  bannerActive: { backgroundColor: '#1B5E20' },
+  bannerDone: { backgroundColor: '#4CAF50' },
+  bannerGardering: { backgroundColor: '#E65100' },
+  bannerLive: { backgroundColor: '#C62828' },
+  bannerWaiting: { backgroundColor: '#E8F5E9', borderWidth: 1, borderColor: '#C8E6C9' },
+  bannerLeft: { marginRight: 14 },
+  bannerContent: { flex: 1 },
+  bannerTitle: { fontSize: 17, fontWeight: '700', color: '#fff' },
+  bannerTitleDark: { fontSize: 17, fontWeight: '700', color: '#1B5E20' },
+  bannerSub: { fontSize: 13, color: 'rgba(255,255,255,0.85)', marginTop: 2 },
+  bannerSubDark: { fontSize: 13, color: '#4CAF50', marginTop: 2 },
+  liveDot: { width: 12, height: 12, borderRadius: 6, backgroundColor: '#fff' },
+
+  // Grid
+  grid: { flexDirection: 'row', gap: 12, marginBottom: 12 },
+
+  // Cards
+  card: {
     flex: 1,
-  },
-  taskLabel: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
-  },
-  taskLabelDisabled: {
-    color: '#999',
-  },
-  taskDescription: {
-    fontSize: 13,
-    color: '#888',
-    marginTop: 2,
-  },
-  taskFooter: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#1B5E20',
-    textAlign: 'center',
-    marginTop: 16,
-  },
-
-  // Result card (B)
-  resultCard: {
     backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 28,
-    alignItems: 'center',
-    marginBottom: 20,
+    borderRadius: 14,
+    padding: 16,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.12,
-    shadowRadius: 10,
-    elevation: 5,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 3,
   },
-  resultIcon: {
-    marginBottom: 12,
-  },
-  resultTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#333',
-    marginBottom: 6,
-  },
-  resultRatt: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: '#1B5E20',
-    marginBottom: 4,
-  },
-  resultVinst: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 4,
-  },
-
-  // Waiting card (C)
-  waitingCard: {
+  cardSmall: {
+    flex: 1,
     backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 28,
-    alignItems: 'center',
-    marginBottom: 20,
+    borderRadius: 14,
+    padding: 16,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.12,
-    shadowRadius: 10,
-    elevation: 5,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 3,
   },
-  waitingTitle: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: '#333',
-    textAlign: 'center',
-    marginBottom: 6,
-  },
-  waitingSubtitle: {
-    fontSize: 14,
-    color: '#888',
-  },
+  cardLabel: { fontSize: 12, fontWeight: '600', color: '#888', textTransform: 'uppercase', marginBottom: 6 },
+  cardValue: { fontSize: 24, fontWeight: '800', color: '#333', marginBottom: 4 },
+  cardValueMd: { fontSize: 20, fontWeight: '800', color: '#333', marginBottom: 2 },
+  cardPoints: { fontSize: 14, color: '#555', marginBottom: 2 },
+  cardMeta: { fontSize: 12, color: '#999', marginTop: 2 },
+  positive: { color: '#2E7D32', fontWeight: '600' },
+  negative: { color: '#C62828', fontWeight: '600' },
 
-  // Live card (D)
-  liveCard: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 28,
-    alignItems: 'center',
-    marginBottom: 20,
-    borderWidth: 2,
-    borderColor: '#E53935',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.12,
-    shadowRadius: 10,
-    elevation: 5,
-  },
-  liveBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#E53935',
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: 12,
-    marginBottom: 12,
-  },
-  liveDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#fff',
-    marginRight: 6,
-  },
-  liveBadgeText: {
-    color: '#fff',
-    fontWeight: '800',
-    fontSize: 13,
-  },
-  liveTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#333',
-    marginBottom: 4,
-  },
-  liveSubtitle: {
-    fontSize: 15,
-    color: '#666',
-    marginBottom: 8,
-  },
-  liveProgress: {
-    fontSize: 13,
-    color: '#888',
-  },
+  // Economy details
+  ecoRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 },
+  ecoDetail: { fontSize: 11, color: '#888' },
 
-  // Position card
-  positionCard: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 28,
-    alignItems: 'center',
-    marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.12,
-    shadowRadius: 10,
-    elevation: 5,
-  },
-  positionIcon: {
-    fontSize: 48,
-    marginBottom: 12,
-  },
-  positionRank: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#1B5E20',
-    marginBottom: 4,
-  },
-  positionPoints: {
-    fontSize: 15,
-    color: '#555',
-    marginBottom: 4,
-  },
-  slutspelsText: {
-    fontSize: 13,
-    color: '#888',
-    marginBottom: 8,
-  },
-  positionArrow: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#1B5E20',
-    marginTop: 4,
-  },
-  footerText: {
-    fontSize: 11,
-    color: '#bbb',
-    textAlign: 'center',
-    marginTop: 30,
-  },
+  // Leader row
+  leaderRow: { flexDirection: 'row', alignItems: 'center', marginTop: 8, gap: 4 },
+  leaderText: { fontSize: 11, color: '#666' },
+
+  // Footer
+  footerText: { fontSize: 11, color: '#bbb', textAlign: 'center', marginTop: 20 },
 });
