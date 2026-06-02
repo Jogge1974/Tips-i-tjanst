@@ -1976,7 +1976,7 @@ async function checkAndSendNotifications(context) {
             `SELECT DISTINCT l.ansvarigId as userId
              FROM TIT_lottning l
              LEFT JOIN TIT_tipsrad t ON t.spelomgang = l.spelomgang AND t.ansvarigId = l.ansvarigId
-             WHERE l.spelomgang = ? AND t.matchNr IS NULL`,
+             WHERE l.spelomgang = ? AND t.id IS NULL`,
             [spelomgang]
         );
 
@@ -2020,7 +2020,7 @@ async function checkAndSendNotifications(context) {
                 `SELECT DISTINCT l.ansvarigId as userId
                  FROM TIT_lottning l
                  LEFT JOIN TIT_tipsrad t ON t.spelomgang = l.spelomgang AND t.ansvarigId = l.ansvarigId
-                 WHERE l.spelomgang = ? AND t.matchNr IS NULL`,
+                 WHERE l.spelomgang = ? AND t.id IS NULL`,
                 [spelomgang]
             );
             for (const row of untipped) {
@@ -2049,7 +2049,7 @@ async function checkAndSendNotifications(context) {
                 `SELECT DISTINCT l.ansvarigId as userId
                  FROM TIT_lottning l
                  LEFT JOIN TIT_tipsrad t ON t.spelomgang = l.spelomgang AND t.ansvarigId = l.ansvarigId
-                 WHERE l.spelomgang = ? AND t.matchNr IS NULL`,
+                 WHERE l.spelomgang = ? AND t.id IS NULL`,
                 [spelomgang]
             );
             for (const row of untipped) {
@@ -2401,10 +2401,6 @@ app.http('api', {
                     return await getPushSettings(params);
                 case 'updatePushSettings':
                     return await updatePushSettings(params);
-                case 'runNotificationsNow': {
-                    await checkAndSendNotifications(context);
-                    return jsonResponse({ success: true, ranAt: new Date().toISOString() });
-                }
                 case 'testPush': {
                     const db = getPool();
                     const testUserId = params.get('userId') || body?.userId;

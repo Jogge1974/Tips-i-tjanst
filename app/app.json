@@ -2,7 +2,7 @@
   "expo": {
     "name": "Tips(i)tjänst",
     "slug": "tips-i-tjanst",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -14,7 +14,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "se.liveidrott.tipsitjanst",
-      "buildNumber": "3",
+      "buildNumber": "4",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
@@ -26,7 +26,7 @@
         "backgroundColor": "#1B5E20"
       },
       "package": "se.liveidrott.tipsitjanst",
-      "versionCode": 3,
+      "versionCode": 4,
       "usesCleartextTraffic": true
     },
     "web": {

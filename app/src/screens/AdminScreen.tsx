@@ -77,6 +77,8 @@ export default function AdminScreen() {
   const [hasChanges, setHasChanges] = useState(false);
   const [panelMode, setPanelMode] = useState<'grund' | 'gard'>('grund');
   const [generateOnSave, setGenerateOnSave] = useState(false);
+  const [omgangStatus, setOmgangStatus] = useState<'avsluta' | 'vantar' | 'startNy' | 'updateOdds'>('vantar');
+  const [omgangLoading, setOmgangLoading] = useState(false);
   const [analysisModal, setAnalysisModal] = useState<{
     visible: boolean; home: any; away: any; standings: any[]; league: string;
     eventHome: string; eventAway: string; loading: boolean;
@@ -125,7 +127,8 @@ export default function AdminScreen() {
     useCallback(() => {
       loadData();
       loadEkonomi();
-    }, [loadData, loadEkonomi])
+      loadOmgangStatus();
+    }, [loadData, loadEkonomi, loadOmgangStatus])
   );
 
   const saveEkonomi = async () => {
@@ -164,6 +167,92 @@ export default function AdminScreen() {
   const updateEkonomi = (field: keyof EkonomiData, value: string | number) => {
     if (!ekonomi) return;
     setEkonomi({ ...ekonomi, [field]: value });
+  };
+
+  const loadOmgangStatus = useCallback(async () => {
+    try {
+      const resp = await fetch(`${API_BASE_URL}?action=getOmgangStatus`);
+      const json = await resp.json();
+      if (json.status) setOmgangStatus(json.status);
+    } catch { }
+  }, []);
+
+  const handleAvslutaOmgang = async () => {
+    setOmgangLoading(true);
+    try {
+      const resp = await fetch(`${API_BASE_URL}?action=avslutaOmgang`);
+      const json = await resp.json();
+      if (json.success) {
+        Alert.alert(
+          'Omgång avslutad!',
+          `Omgång: ${json.spelomgang}\nAntal rätt: ${json.antalRatt}\nInsats: ${json.insats} rader\nVinst: ${json.vinst} kr${json.tipsAllsvenskanUpdated ? '\n\nTipsAllsvenskan uppdaterad ✓' : ''}`
+        );
+        loadData();
+        loadEkonomi();
+        loadOmgangStatus();
+      } else {
+        Alert.alert('Fel', json.error || 'Kunde inte avsluta omgång');
+      }
+    } catch (err: any) {
+      Alert.alert('Fel', err.message);
+    }
+    setOmgangLoading(false);
+  };
+
+  const handleStartNyOmgang = async () => {
+    setOmgangLoading(true);
+    try {
+      const resp = await fetch(`${API_BASE_URL}?action=startNyOmgang&veckansKapital=260&isSlutspel=0`);
+      const json = await resp.json();
+      if (json.success) {
+        Alert.alert(
+          'Ny omgång startad!',
+          `Omgång: ${json.spelomgang}\nDraw: ${json.drawNumber}\nMatcher: ${json.antalMatcher}\nDeltagare: ${json.antalDeltagare}`
+        );
+        loadData();
+        loadEkonomi();
+        loadOmgangStatus();
+      } else {
+        Alert.alert('Fel', json.error || 'Kunde inte starta ny omgång');
+      }
+    } catch (err: any) {
+      Alert.alert('Fel', err.message);
+    }
+    setOmgangLoading(false);
+  };
+
+  const handleUpdateOdds = async () => {
+    setOmgangLoading(true);
+    try {
+      const resp = await fetch(`${API_BASE_URL}?action=updateOdds`);
+      const json = await resp.json();
+      if (json.success) {
+        Alert.alert('Odds uppdaterade', `${json.updated} matcher uppdaterade`);
+        loadData();
+      } else {
+        Alert.alert('Fel', json.error || 'Kunde inte uppdatera odds');
+      }
+    } catch (err: any) {
+      Alert.alert('Fel', err.message);
+    }
+    setOmgangLoading(false);
+  };
+
+  const [pushLoading, setPushLoading] = useState(false);
+  const handleRunNotifications = async () => {
+    setPushLoading(true);
+    try {
+      const resp = await fetch(`${API_BASE_URL}?action=runNotificationsNow`);
+      const json = await resp.json();
+      if (json.success) {
+        Alert.alert('Push kört', `Notisjobbet kördes ${json.ranAt}`);
+      } else {
+        Alert.alert('Fel', json.error || 'Kunde inte köra notisjobb');
+      }
+    } catch (err: any) {
+      Alert.alert('Fel', err.message);
+    }
+    setPushLoading(false);
   };
 
   const toggleSpeletOppet = async (value: boolean) => {
@@ -543,15 +632,15 @@ export default function AdminScreen() {
       {/* Save row with checkbox */}
       <View style={styles.saveRow}>
         <TouchableOpacity
-          style={[styles.saveBtn, !hasChanges && styles.saveBtnDisabled]}
+          style={[styles.saveBtn, !(hasChanges || generateOnSave) && styles.saveBtnDisabled]}
           onPress={handleSave}
-          disabled={!hasChanges || saving}
+          disabled={!(hasChanges || generateOnSave) || saving}
         >
           {saving ? (
             <ActivityIndicator color="#fff" />
           ) : (
             <Text style={styles.saveBtnText}>
-              {hasChanges ? 'Spara' : 'Inga ändringar'}
+              {(hasChanges || generateOnSave) ? 'Spara' : 'Inga ändringar'}
             </Text>
           )}
         </TouchableOpacity>
@@ -564,6 +653,65 @@ export default function AdminScreen() {
             {generateOnSave && <Text style={styles.genCheckmark}>✓</Text>}
           </View>
           <Text style={styles.genCheckLabel}>Skapa system</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Dynamic action button */}
+      <View style={styles.avslutaSection}>
+        <TouchableOpacity
+          style={[
+            styles.avslutaBtn,
+            omgangStatus === 'vantar' && styles.avslutaBtnDisabled,
+            omgangStatus === 'startNy' && styles.startNyBtn,
+            omgangStatus === 'updateOdds' && styles.updateOddsBtn,
+          ]}
+          disabled={omgangStatus === 'vantar' || omgangLoading}
+          onPress={() => {
+            if (omgangStatus === 'avsluta') {
+              Alert.alert(
+                'Avsluta omgång',
+                `Är du säker på att du vill avsluta omgång ${data.spelomgang}?\n\nDetta uppdaterar rätt rad, ekonomi och TipsAllsvenskan.`,
+                [
+                  { text: 'Avbryt', style: 'cancel' },
+                  { text: 'Avsluta', style: 'destructive', onPress: handleAvslutaOmgang },
+                ]
+              );
+            } else if (omgangStatus === 'startNy') {
+              Alert.alert(
+                'Starta ny omgång',
+                'Vill du initiera nästa omgång?\n\n• Ny post i ekonomi\n• Hämta kupong\n• Lotta matcher\n• Öppna spelet',
+                [
+                  { text: 'Avbryt', style: 'cancel' },
+                  { text: 'Starta', onPress: handleStartNyOmgang },
+                ]
+              );
+            } else if (omgangStatus === 'updateOdds') {
+              handleUpdateOdds();
+            }
+          }}
+        >
+          {omgangLoading ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.avslutaBtnText}>
+              {omgangStatus === 'avsluta' && 'Avsluta omgång'}
+              {omgangStatus === 'vantar' && 'Väntar på nästa omg'}
+              {omgangStatus === 'startNy' && 'Starta ny omgång'}
+              {omgangStatus === 'updateOdds' && 'Uppdatera odds'}
+            </Text>
+          )}
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.avslutaBtn, styles.pushBtn, { marginTop: 12 }]}
+          disabled={pushLoading}
+          onPress={handleRunNotifications}
+        >
+          {pushLoading ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.avslutaBtnText}>Skicka push nu</Text>
+          )}
         </TouchableOpacity>
       </View>
 
@@ -951,4 +1099,22 @@ const styles = StyleSheet.create({
   },
   ekoSaveBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
   ekoNoData: { fontSize: 14, color: '#999', textAlign: 'center', marginVertical: 16 },
+  avslutaSection: { marginTop: 24, paddingHorizontal: 16 },
+  avslutaBtn: {
+    backgroundColor: '#B71C1C', borderRadius: 10, padding: 16,
+    alignItems: 'center',
+  },
+  avslutaBtnDisabled: {
+    backgroundColor: '#999',
+  },
+  startNyBtn: {
+    backgroundColor: '#1B5E20',
+  },
+  updateOddsBtn: {
+    backgroundColor: '#1565C0',
+  },
+  pushBtn: {
+    backgroundColor: '#6A1B9A',
+  },
+  avslutaBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
 });

@@ -147,4 +147,75 @@ export const api = {
     if (!response.ok) throw new Error('Kunde inte hämta dashboard');
     return response.json();
   },
+
+  async getLiveGarderingTable(): Promise<{ isSlutspel: number; table: { userId: number; namn: string; ratt: number | null; position: number | null }[] }> {
+    const response = await fetch(`${API_BASE_URL}?action=getLiveGarderingTable`);
+    if (!response.ok) throw new Error('Kunde inte hämta garderingstabell');
+    return response.json();
+  },
+
+  async getGrundtipsen(): Promise<{ matchNr: number; ansvarig: string; tecken: string | null; isCorrect: boolean | null; isSTMF: boolean; odds: number; score: string | null; status: string; isFinished: boolean; cancelled: boolean; sportEventStart: string }[]> {
+    const response = await fetch(`${API_BASE_URL}?action=getGrundtipsen`);
+    if (!response.ok) throw new Error('Kunde inte hämta grundtipsen');
+    return response.json();
+  },
+
+  async getRoundHistory(): Promise<{
+    sasong: number | null;
+    rounds: {
+      roundNr: number;
+      spelomgang: string;
+      isSlutspel: number;
+      grundtips: { matchNr: number; ansvarig: string; tecken: string | null; rtecken: string | null; isCorrect: boolean | null; isSTMF: boolean; odds: number }[];
+      garderingTable: { userId: number; namn: string; ratt: number | null; position: number | null }[];
+    }[];
+  }> {
+    const response = await fetch(`${API_BASE_URL}?action=getRoundHistory`);
+    if (!response.ok) throw new Error('Kunde inte hämta omgångshistorik');
+    return response.json();
+  },
+
+  async getUserKupong(userId: number, spelomgang: string): Promise<{
+    userName: string;
+    spelomgang: string;
+    isSlutspel: number;
+    matches: {
+      matchNr: number;
+      lag: string;
+      grundtecken: string | null;
+      userTecken: string | null;
+      rtecken: string | null;
+      isCorrect: boolean | null;
+      isSTMF: boolean;
+      odds: number;
+    }[];
+  }> {
+    const response = await fetch(`${API_BASE_URL}?action=getUserKupong&userId=${userId}&spelomgang=${encodeURIComponent(spelomgang)}`);
+    if (!response.ok) throw new Error('Kunde inte hämta kupong');
+    return response.json();
+  },
+
+  async getAllGarderingar(spelomgang: string): Promise<{
+    spelomgang: string;
+    isSlutspel: number;
+    matches: { matchNr: number; lag: string; rtecken: string | null }[];
+    users: { userId: number; namn: string; ratt: number; tecken: Record<string, { t: string | null; c: boolean | null }> }[];
+  }> {
+    const response = await fetch(`${API_BASE_URL}?action=getAllGarderingar&spelomgang=${encodeURIComponent(spelomgang)}`);
+    if (!response.ok) throw new Error('Kunde inte hämta garderingar');
+    return response.json();
+  },
+
+  async avslutaOmgang(): Promise<{
+    success: boolean;
+    spelomgang: string;
+    antalRatt: number;
+    insats: number;
+    vinst: number;
+    tipsAllsvenskanUpdated: boolean;
+  }> {
+    const response = await fetch(`${API_BASE_URL}?action=avslutaOmgang`);
+    if (!response.ok) throw new Error('Kunde inte avsluta omgång');
+    return response.json();
+  },
 };

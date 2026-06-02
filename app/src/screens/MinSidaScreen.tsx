@@ -68,11 +68,14 @@ export default function MinSidaScreen() {
       const matchData = await api.getMyMatch(user.id);
       setMyMatch(matchData);
 
-      // Sätt befintligt tipstecken om det finns
+      // Sätt befintligt tipstecken om det finns, annars nollställ (ny omgång)
       if (matchData) {
         if (matchData.etta === '1') setSelectedTecken('1');
         else if (matchData.kryss === '1') setSelectedTecken('X');
         else if (matchData.tvaa === '1') setSelectedTecken('2');
+        else setSelectedTecken(null);
+      } else {
+        setSelectedTecken(null);
       }
 
       // Om garderingsläge, hämta kupong och befintliga garderingar

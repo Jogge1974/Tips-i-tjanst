@@ -12,6 +12,7 @@ import {
   Image,
 } from 'react-native';
 import { api } from '../services/api';
+import { Ionicons } from '@expo/vector-icons';
 
 const API_BASE_URL = 'https://tipstjanst-api-bpdxhah7f9hxhpce.westeurope-01.azurewebsites.net/api/api';
 
@@ -23,6 +24,8 @@ interface LiveEvent {
   league: string;
   sportEventStart: string;
   sportEventStatus: string;
+  isFinished: boolean;
+  cancelled: boolean;
   outcomes: { home: string; draw: string; away: string } | null;
   odds: { home: string; draw: string; away: string };
 }
@@ -84,7 +87,7 @@ function calculateCorrect(row: SystemRow, events: LiveEvent[]): number {
 
 function getEventStatusColor(status: string): string {
   if (status === 'Inte startat') return '#999';
-  if (status === 'Avslutad') return '#1B5E20';
+  if (status === 'Avslutad' || status === 'Slut' || status.startsWith('Slut')) return '#1B5E20';
   return '#E65100'; // Pågående
 }
 
@@ -109,6 +112,18 @@ export default function LiveScreen() {
   }>({ visible: false, home: null, away: null, standings: [], league: '', eventHome: '', eventAway: '', loading: false });
 
   const [selectedRowIdx, setSelectedRowIdx] = useState(0);
+  const [garderingTable, setGarderingTable] = useState<{ isSlutspel: number; spelomgang: string; table: { userId: number; namn: string; ratt: number | null; position: number | null }[] } | null>(null);
+  const [grundtipsen, setGrundtipsen] = useState<{ matchNr: number; ansvarig: string; tecken: string | null; isCorrect: boolean | null; isSTMF: boolean; odds: number; score: string | null; status: string; isFinished: boolean; cancelled: boolean; sportEventStart: string }[] | null>(null);
+  const [utdelningExpanded, setUtdelningExpanded] = useState(false);
+  const [garderingExpanded, setGarderingExpanded] = useState(false);
+  const [grundtipsenExpanded, setGrundtipsenExpanded] = useState(false);
+  const [kupongModal, setKupongModal] = useState<{
+    spelomgang: string;
+    isSlutspel: number;
+    matches: { matchNr: number; lag: string; rtecken: string | null }[];
+    users: { userId: number; namn: string; ratt: number; tecken: Record<string, { t: string | null; c: boolean | null }> }[];
+  } | null>(null);
+  const [kupongLoading, setKupongLoading] = useState(false);
 
   const openAnalysis = async (event: LiveEvent) => {
     setAnalysisModal({ visible: true, home: null, away: null, standings: [], league: event.league || '', eventHome: event.home, eventAway: event.away, loading: true });
@@ -122,6 +137,19 @@ export default function LiveScreen() {
       setAnalysisModal(prev => ({ ...prev, home: data.home, away: data.away, standings: data.standings || [], loading: false }));
     } catch {
       setAnalysisModal(prev => ({ ...prev, loading: false }));
+    }
+  };
+
+  const openKupong = async () => {
+    if (!garderingTable?.spelomgang) return;
+    setKupongLoading(true);
+    try {
+      const data = await api.getAllGarderingar(garderingTable.spelomgang);
+      setKupongModal(data);
+    } catch (e) {
+      console.error('Failed to load garderingar:', e);
+    } finally {
+      setKupongLoading(false);
     }
   };
 
@@ -154,6 +182,18 @@ export default function LiveScreen() {
         const rowsData = await api.getSystemRows(drawData.drawNumber);
         setRows(rowsData);
       }
+
+      // Fetch gardering table
+      try {
+        const gardData = await api.getLiveGarderingTable();
+        setGarderingTable(gardData);
+      } catch (e) { /* ignore */ }
+
+      // Fetch grundtipsen
+      try {
+        const grundData = await api.getGrundtipsen();
+        setGrundtipsen(grundData);
+      } catch (e) { /* ignore */ }
     } catch (error: any) {
       console.error('Live error:', error);
     } finally {
@@ -170,14 +210,14 @@ export default function LiveScreen() {
     }, [loadData])
   );
 
-  // Rensa ändrade event-markeringar efter 60 sekunder
+  // Rensa ändrade event-markeringar efter 2 minuter
   useEffect(() => {
     const cleanup = setInterval(() => {
       const now = Date.now();
       setChangedEvents(prev => {
         const filtered: Record<number, number> = {};
         for (const [key, ts] of Object.entries(prev)) {
-          if (now - ts < 60000) filtered[Number(key)] = ts;
+          if (now - ts < 120000) filtered[Number(key)] = ts;
         }
         return Object.keys(filtered).length === Object.keys(prev).length ? prev : filtered;
       });
@@ -219,9 +259,9 @@ export default function LiveScreen() {
   // Sortera på antal rätt (högst först)
   const sortedRows = [...rowResults].sort((a, b) => b.correct - a.correct);
 
-  // Räkna antal slutförda matcher (bara "Slut")
+  // Räkna antal slutförda matcher
   const finishedEvents = draw.events.filter(
-    (e) => e.sportEventStatus === 'Slut' || e.sportEventStatus === 'Avslutad'
+    (e) => e.isFinished || e.cancelled
   ).length;
 
   // Bästa rad
@@ -438,7 +478,7 @@ export default function LiveScreen() {
             const hasCovered = rows.length > 0;
             const weCoveredResult = hasCovered && coveredSigns.has(sign);
             const isStarted = event.sportEventStatus !== 'Inte startat';
-            const isFinished = event.sportEventStatus === 'Slut' || event.sportEventStatus === 'Avslutad';
+            const isFinished = event.isFinished || event.cancelled;
 
             const hasRecentGoal = !!changedEvents[event.eventNumber];
 
@@ -461,11 +501,17 @@ export default function LiveScreen() {
                     <Text style={styles.eventTimeText}>{formatTime(event.sportEventStart)}</Text>
                   ) : (
                     <View style={styles.scoreArea}>
-                      {hasRecentGoal && <Text style={styles.goalIcon}>⚽</Text>}
-                      {isFinished && !hasRecentGoal && <Text style={styles.ftPrefix}>FT</Text>}
+                      {hasRecentGoal ? (
+                        <Text style={styles.goalIcon}>⚽</Text>
+                      ) : isFinished ? (
+                        <Text style={styles.ftPrefix}>FT</Text>
+                      ) : (
+                        <Text style={styles.eventTimeStarted}>{formatTime(event.sportEventStart)}</Text>
+                      )}
                       <View style={[
                         styles.scoreBadge,
                         weCoveredResult ? styles.scoreBadgeCovered : styles.scoreBadgeNotCovered,
+                        isFinished && { backgroundColor: '#fff' },
                       ]}>
                         <Text style={[styles.scoreBadgeText, weCoveredResult ? styles.scoreBadgeTextCovered : styles.scoreBadgeTextNotCovered]}>{score}</Text>
                       </View>
@@ -479,7 +525,7 @@ export default function LiveScreen() {
                       const isCovered = coveredSigns.has(s);
                       const isCurrent = s === sign;
                       let borderColor = 'transparent';
-                      if (isCurrent && isStarted) {
+                      if (isCurrent) {
                         borderColor = isCovered ? '#1B5E20' : '#C62828';
                       }
                       return (
@@ -488,7 +534,7 @@ export default function LiveScreen() {
                           style={[
                             styles.signBox,
                             isCovered ? styles.signBoxCovered : styles.signBoxUncovered,
-                            isCurrent && isStarted && { borderWidth: 2.5, borderColor },
+                            isCurrent && { borderWidth: 2.5, borderColor },
                           ]}
                         >
                           <Text style={[
@@ -525,8 +571,13 @@ export default function LiveScreen() {
                 const sign = getResultSign(event);
                 const score = getScore(event);
                 const isStarted = event.sportEventStatus !== 'Inte startat';
-                const isFinished = event.sportEventStatus === 'Slut' || event.sportEventStatus === 'Avslutad';
+                const isFinished = event.isFinished || event.cancelled;
                 const hasRecentGoal = !!changedEvents[event.eventNumber];
+                const coveredSigns = new Set<string>();
+                for (const row of rows) {
+                  coveredSigns.add((row as any)[`m${idx + 1}`]);
+                }
+                const weCoveredResult = rows.length > 0 && coveredSigns.has(sign);
 
                 return (
                   <View key={event.eventNumber} style={[
@@ -549,9 +600,10 @@ export default function LiveScreen() {
                           {isFinished && !hasRecentGoal && <Text style={styles.ftPrefix}>FT</Text>}
                           <View style={[
                             styles.scoreBadge,
-                            styles.scoreBadgeCovered,
+                            weCoveredResult ? styles.scoreBadgeCovered : styles.scoreBadgeNotCovered,
+                            isFinished && { backgroundColor: '#fff' },
                           ]}>
-                            <Text style={[styles.scoreBadgeText, styles.scoreBadgeTextCovered]}>{score}</Text>
+                            <Text style={[styles.scoreBadgeText, weCoveredResult ? styles.scoreBadgeTextCovered : styles.scoreBadgeTextNotCovered]}>{score}</Text>
                           </View>
                         </View>
                       )}
@@ -603,18 +655,176 @@ export default function LiveScreen() {
         </View>
       )}
 
-      {/* Rättningstabellen */}
+      {/* Preliminär utdelning - expandable */}
       {rows.length > 0 && (
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Antal rätt / rader</Text>
-          {[13, 12, 11, 10].map((n) => (
-            <View key={n} style={styles.rightRow}>
-              <Text style={styles.rightLabel}>{n} rätt</Text>
-              <Text style={styles.rightAmount}>{getDistAmount(n)} kr</Text>
-              <Text style={styles.rightValue}>{rightCount[n] || 0} st</Text>
+        <TouchableOpacity
+          style={styles.card}
+          activeOpacity={0.8}
+          onPress={() => setUtdelningExpanded(!utdelningExpanded)}
+        >
+          <View style={styles.expandableHeader}>
+            <View style={styles.cardTitleRow}>
+              <Ionicons name="cash-outline" size={20} color="#1B5E20" />
+              <Text style={styles.cardTitle}>Preliminär utdelning</Text>
             </View>
-          ))}
-        </View>
+            <Text style={styles.expandArrow}>{utdelningExpanded ? '▲' : '▼'}</Text>
+          </View>
+          {utdelningExpanded && (
+            <View style={styles.expandableContent}>
+              {[13, 12, 11, 10].map((n) => (
+                <View key={n} style={styles.rightRow}>
+                  <Text style={styles.rightLabel}>{n} rätt</Text>
+                  <Text style={styles.rightAmount}>{getDistAmount(n)} kr</Text>
+                  <Text style={styles.rightValue}>{rightCount[n] || 0} st</Text>
+                </View>
+              ))}
+            </View>
+          )}
+        </TouchableOpacity>
+      )}
+
+      {/* Garderingstabellen / Enkelradstabellen - expandable */}
+      {garderingTable && garderingTable.table.length > 0 && (
+        <TouchableOpacity
+          style={styles.card}
+          activeOpacity={0.8}
+          onPress={() => setGarderingExpanded(!garderingExpanded)}
+        >
+          <View style={styles.expandableHeader}>
+            <View style={styles.cardTitleRow}>
+              <Ionicons name="trophy-outline" size={20} color="#1B5E20" />
+              <Text style={styles.cardTitle}>
+                {garderingTable.isSlutspel === 1 ? 'Enkelradstabellen (just nu)' : 'Garderingstabellen (just nu)'}
+              </Text>
+            </View>
+            <Text style={styles.expandArrow}>{garderingExpanded ? '▲' : '▼'}</Text>
+          </View>
+          {garderingExpanded && (
+            <View style={styles.expandableContent}>
+              {garderingTable.table.map((entry, idx) => {
+                const isLeader = entry.position === 1 && entry.ratt !== null;
+                const isSecond = entry.position === 2 && entry.ratt !== null;
+                const isThird = entry.position === 3 && entry.ratt !== null;
+                const medal = isLeader ? '🥇' : isSecond ? '🥈' : isThird ? '🥉' : null;
+                const canClick = entry.ratt !== null;
+                return (
+                  <TouchableOpacity
+                    key={entry.userId}
+                    activeOpacity={canClick ? 0.6 : 1}
+                    disabled={!canClick}
+                    onPress={() => canClick && openKupong()}
+                    style={[
+                      styles.garderingRow,
+                      isLeader && styles.garderingRowLeader,
+                      idx < garderingTable.table.length - 1 && styles.garderingRowBorder,
+                    ]}
+                  >
+                    <View style={styles.garderingPosCol}>
+                      {medal ? (
+                        <Text style={styles.garderingMedal}>{medal}</Text>
+                      ) : (
+                        <Text style={styles.garderingPos}>{entry.position ?? '-'}</Text>
+                      )}
+                    </View>
+                    <Text style={[styles.garderingName, isLeader && styles.garderingNameLeader]} numberOfLines={1}>
+                      {entry.namn}
+                    </Text>
+                    <Text style={[
+                      styles.garderingRatt,
+                      entry.ratt === null && styles.garderingRattNull,
+                      isLeader && styles.garderingRattLeader,
+                    ]}>
+                      {entry.ratt !== null ? `${entry.ratt} rätt` : 'ej tippat'}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
+        </TouchableOpacity>
+      )}
+
+      {/* Grundtipsen - expandable */}
+      {grundtipsen && grundtipsen.length > 0 && (
+        <TouchableOpacity
+          style={styles.card}
+          activeOpacity={0.8}
+          onPress={() => setGrundtipsenExpanded(!grundtipsenExpanded)}
+        >
+          <View style={styles.expandableHeader}>
+            <View style={styles.cardTitleRow}>
+              <View style={styles.cardTitle1X2Badge}>
+                <Text style={styles.cardTitle1X2Text}>1X2</Text>
+              </View>
+              <Text style={styles.cardTitle}>Grundtipsen (just nu)</Text>
+            </View>
+            <Text style={styles.expandArrow}>{grundtipsenExpanded ? '▲' : '▼'}</Text>
+          </View>
+          {grundtipsenExpanded && (
+            <View style={styles.expandableContent}>
+              {grundtipsen.map((match, idx) => {
+                const isStarted = match.status !== 'Inte startat';
+                const isFinished = match.isFinished || match.cancelled;
+                const isLive = isStarted && !isFinished;
+                const formatStartTime = (dateStr: string) => {
+                  if (!dateStr) return '';
+                  const d = new Date(dateStr);
+                  return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+                };
+
+                return (
+                  <View key={match.matchNr} style={[
+                    styles.grundtipsenRow,
+                    idx < grundtipsen.length - 1 && styles.grundtipsenRowBorder,
+                  ]}>
+                    <Text style={styles.grundtipsenNr}>{match.matchNr}</Text>
+                    <Text style={styles.grundtipsenNamn} numberOfLines={1}>{match.ansvarig}</Text>
+
+                    <View style={styles.grundtipsenResultCol}>
+                      {!isStarted ? (
+                        <Text style={styles.grundtipsenTime}>{formatStartTime(match.sportEventStart)}</Text>
+                      ) : (
+                        <View style={[
+                          styles.grundtipsenScoreBadge,
+                          isLive && (match.isCorrect ? styles.grundtipsenScoreCorrect : styles.grundtipsenScoreLive),
+                        ]}>
+                          {isFinished && <Text style={styles.grundtipsenFT}>FT</Text>}
+                          <Text style={[styles.grundtipsenScore, match.isCorrect === true && styles.grundtipsenScoreTextCorrect]}>{match.score || '0-0'}</Text>
+                        </View>
+                      )}
+                    </View>
+
+                    <View style={[
+                      styles.grundtipsenTeckenBox,
+                      match.isCorrect === true && styles.grundtipsenTeckenCorrect,
+                      match.isCorrect === false && styles.grundtipsenTeckenWrong,
+                      match.isCorrect === null && styles.grundtipsenTeckenNeutral,
+                    ]}>
+                      <Text style={[
+                        styles.grundtipsenTeckenText,
+                        match.isCorrect === true && styles.grundtipsenTeckenTextCorrect,
+                        match.isCorrect === false && styles.grundtipsenTeckenTextWrong,
+                      ]}>{match.tecken || '-'}</Text>
+                    </View>
+
+                    <View style={styles.grundtipsenOddsCol}>
+                      {match.isSTMF ? (
+                        <View style={styles.grundtipsenStmfBadge}>
+                          <Text style={styles.grundtipsenStmfText}>STMF</Text>
+                        </View>
+                      ) : (
+                        <Text style={[
+                          styles.grundtipsenOdds,
+                          match.odds === 0 && styles.grundtipsenOddsZero,
+                        ]}>{match.odds > 0 ? match.odds.toFixed(2) : '0'}</Text>
+                      )}
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+          )}
+        </TouchableOpacity>
       )}
     </ScrollView>
 
@@ -704,6 +914,86 @@ export default function LiveScreen() {
               <Text style={styles.closeAnalysisBtnText}>Stäng</Text>
             </TouchableOpacity>
           </ScrollView>
+        </View>
+      </Modal>
+
+      {/* Kupong Modal */}
+      <Modal
+        visible={!!kupongModal || kupongLoading}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setKupongModal(null)}
+      >
+        <View style={styles.kupongOverlay}>
+          <View style={styles.kupongContent}>
+            {kupongLoading ? (
+              <ActivityIndicator size="large" color="#1B5E20" />
+            ) : kupongModal ? (
+              <>
+                <View style={styles.kupongHeader}>
+                  <Text style={styles.kupongTitle}>
+                    {kupongModal.isSlutspel ? 'Enkelrader' : 'Garderingar'}
+                  </Text>
+                  <Text style={styles.kupongSubtitle}>{kupongModal.spelomgang}</Text>
+                </View>
+                <ScrollView style={styles.kupongScroll}>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={true}>
+                    <View>
+                      {/* Header row */}
+                      <View style={styles.kupongHeaderRow}>
+                        <Text style={styles.kupongHeaderNr}>#</Text>
+                        <Text style={styles.kupongHeaderLag}>Match</Text>
+                        <View style={[styles.kupongTeckenBox, styles.kupongTeckenResultHeader]}>
+                          <Text style={styles.kupongHeaderColText}>R</Text>
+                        </View>
+                        {kupongModal.users.map(u => (
+                          <View key={u.userId} style={styles.kupongUserCol}>
+                            <Text style={styles.kupongUserName} numberOfLines={1}>{u.namn.split(' ')[0]}</Text>
+                            <Text style={styles.kupongUserRatt}>{u.ratt}</Text>
+                          </View>
+                        ))}
+                      </View>
+                      {/* Match rows */}
+                      {kupongModal.matches.map((m, idx) => (
+                        <View key={m.matchNr} style={[
+                          styles.kupongRow,
+                          idx < kupongModal.matches.length - 1 && styles.kupongRowBorder,
+                        ]}>
+                          <Text style={styles.kupongNr}>{m.matchNr}</Text>
+                          <Text style={styles.kupongLag} numberOfLines={1}>{m.lag}</Text>
+                          <View style={[styles.kupongTeckenBox, styles.kupongTeckenResult]}>
+                            <Text style={styles.kupongTeckenResultText}>{m.rtecken || '-'}</Text>
+                          </View>
+                          {kupongModal.users.map(u => {
+                            const cell = u.tecken[m.matchNr];
+                            const t = cell?.t;
+                            const c = cell?.c;
+                            return (
+                              <View key={u.userId} style={[
+                                styles.kupongTeckenBox,
+                                c === true && styles.kupongTeckenCorrect,
+                                c === false && styles.kupongTeckenWrong,
+                                c === null && styles.kupongTeckenNeutral,
+                              ]}>
+                                <Text style={[
+                                  styles.kupongTeckenBoxText,
+                                  c === true && styles.kupongTeckenCorrectText,
+                                  c === false && styles.kupongTeckenWrongText,
+                                ]}>{t || '-'}</Text>
+                              </View>
+                            );
+                          })}
+                        </View>
+                      ))}
+                    </View>
+                  </ScrollView>
+                </ScrollView>
+                <TouchableOpacity style={styles.kupongCloseBtn} onPress={() => setKupongModal(null)}>
+                  <Text style={styles.kupongCloseBtnText}>Stäng</Text>
+                </TouchableOpacity>
+              </>
+            ) : null}
+          </View>
         </View>
       </Modal>
     </>
@@ -842,11 +1132,30 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 4,
   },
+  cardTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flex: 1,
+    marginBottom: 12,
+  },
+  cardTitle1X2Badge: {
+    borderWidth: 1.5,
+    borderColor: '#1B5E20',
+    borderRadius: 4,
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+  },
+  cardTitle1X2Text: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#1B5E20',
+    letterSpacing: 1,
+  },
   cardTitle: {
     fontSize: 16,
     fontWeight: '700',
     color: '#333',
-    marginBottom: 12,
   },
   eventRow: {
     flexDirection: 'row',
@@ -858,10 +1167,8 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   eventRowLive: {
-    backgroundColor: '#E8F5E9',
   },
   eventRowFinished: {
-    backgroundColor: '#FFFDE7',
   },
   eventNr: {
     width: 20,
@@ -885,11 +1192,16 @@ const styles = StyleSheet.create({
   eventResultArea: {
     width: 60,
     alignItems: 'center',
-    marginRight: 8,
+    marginRight: 12,
   },
   eventTimeText: {
     fontSize: 12,
     color: '#666',
+    fontWeight: '500',
+  },
+  eventTimeStarted: {
+    fontSize: 10,
+    color: '#999',
     fontWeight: '500',
   },
   scoreArea: {
@@ -941,10 +1253,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   signBoxCovered: {
-    backgroundColor: '#1B5E20',
+    backgroundColor: '#E8F5E9',
+    borderWidth: 1,
+    borderColor: '#C8E6C9',
   },
   signBoxUncovered: {
     backgroundColor: '#F5F5F5',
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
   },
   signBoxNeutral: {
     backgroundColor: '#f5f5f5',
@@ -956,7 +1272,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   signBoxTextCovered: {
-    color: '#fff',
+    color: '#1B5E20',
   },
   signBoxTextUncovered: {
     color: '#ccc',
@@ -1034,7 +1350,7 @@ const styles = StyleSheet.create({
   },
   enkelradFixed: {
     flexShrink: 0,
-    width: '62%',
+    width: '65%',
   },
   enkelradMatchRow: {
     flexDirection: 'row',
@@ -1048,8 +1364,9 @@ const styles = StyleSheet.create({
     marginRight: 4,
   },
   enkelradResultArea: {
-    width: 48,
+    width: 60,
     alignItems: 'center',
+    marginRight: 4,
   },
   enkelradFooterRow: {
     height: 28,
@@ -1299,5 +1616,360 @@ const styles = StyleSheet.create({
     color: '#333',
     fontSize: 14,
     fontWeight: '600',
+  },
+  expandableHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  expandArrow: {
+    fontSize: 12,
+    color: '#999',
+  },
+  expandableContent: {
+    marginTop: 12,
+  },
+  garderingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 4,
+  },
+  garderingRowLeader: {
+    backgroundColor: '#FFFDE7',
+    borderRadius: 8,
+    marginHorizontal: -4,
+    paddingHorizontal: 8,
+  },
+  garderingRowBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: '#f5f5f5',
+  },
+  garderingPosCol: {
+    width: 32,
+    alignItems: 'center',
+  },
+  garderingMedal: {
+    fontSize: 18,
+  },
+  garderingPos: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#999',
+  },
+  garderingName: {
+    flex: 1,
+    fontSize: 14,
+    color: '#333',
+    marginLeft: 8,
+  },
+  garderingNameLeader: {
+    fontWeight: '700',
+    color: '#222',
+  },
+  garderingRatt: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1B5E20',
+    minWidth: 60,
+    textAlign: 'right',
+  },
+  garderingRattNull: {
+    color: '#bbb',
+    fontWeight: '400',
+    fontStyle: 'italic',
+  },
+  garderingRattLeader: {
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  // Grundtipsen styles
+  grundtipsenRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+  },
+  grundtipsenRowBorder: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#e0e0e0',
+  },
+  grundtipsenNr: {
+    width: 20,
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#666',
+    textAlign: 'center',
+  },
+  grundtipsenNamn: {
+    flex: 1,
+    fontSize: 13,
+    color: '#333',
+    marginLeft: 6,
+  },
+  grundtipsenResultCol: {
+    width: 50,
+    alignItems: 'center',
+    marginRight: 10,
+  },
+  grundtipsenTime: {
+    fontSize: 11,
+    color: '#999',
+  },
+  grundtipsenScoreBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  grundtipsenScoreLive: {
+    borderWidth: 1.5,
+    borderColor: '#E65100',
+    borderRadius: 6,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+  },
+  grundtipsenScoreCorrect: {
+    borderWidth: 1.5,
+    borderColor: '#2E7D32',
+    borderRadius: 6,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+  },
+  grundtipsenFT: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#666',
+  },
+  grundtipsenScore: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#333',
+  },
+  grundtipsenScoreTextCorrect: {
+    color: '#1B5E20',
+  },
+  grundtipsenTeckenBox: {
+    width: 26,
+    height: 26,
+    borderRadius: 4,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1.5,
+    marginRight: 8,
+  },
+  grundtipsenTeckenCorrect: {
+    backgroundColor: '#E8F5E9',
+    borderColor: '#2E7D32',
+  },
+  grundtipsenTeckenWrong: {
+    backgroundColor: '#FFEBEE',
+    borderColor: '#C62828',
+  },
+  grundtipsenTeckenNeutral: {
+    backgroundColor: '#F5F5F5',
+    borderColor: '#e0e0e0',
+  },
+  grundtipsenTeckenText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#333',
+  },
+  grundtipsenTeckenTextCorrect: {
+    color: '#1B5E20',
+  },
+  grundtipsenTeckenTextWrong: {
+    color: '#C62828',
+  },
+  grundtipsenOddsCol: {
+    width: 44,
+    alignItems: 'flex-end',
+  },
+  grundtipsenOdds: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#1B5E20',
+  },
+  grundtipsenOddsZero: {
+    color: '#C62828',
+  },
+  grundtipsenStmfBadge: {
+    backgroundColor: '#FFF3E0',
+    borderRadius: 4,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+  },
+  grundtipsenStmfText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#E65100',
+  },
+  // Kupong modal styles
+  kupongOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  kupongContent: {
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    width: '100%',
+    maxHeight: '80%',
+    padding: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.25,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  kupongHeader: {
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  kupongTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#1B5E20',
+  },
+  kupongSubtitle: {
+    fontSize: 13,
+    color: '#888',
+    marginTop: 2,
+  },
+  kupongScroll: {
+    maxHeight: 400,
+  },
+  kupongCloseBtn: {
+    marginTop: 16,
+    backgroundColor: '#1B5E20',
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  kupongCloseBtnText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  kupongHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    paddingVertical: 4,
+    paddingHorizontal: 4,
+    borderBottomWidth: 1.5,
+    borderBottomColor: '#ccc',
+    marginBottom: 2,
+  },
+  kupongHeaderNr: {
+    width: 20,
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#999',
+    textAlign: 'center',
+  },
+  kupongHeaderLag: {
+    width: 120,
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#999',
+    marginLeft: 4,
+  },
+  kupongHeaderColText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#1565C0',
+  },
+  kupongUserCol: {
+    width: 28,
+    alignItems: 'center',
+    marginLeft: 3,
+  },
+  kupongUserName: {
+    fontSize: 9,
+    fontWeight: '600',
+    color: '#555',
+    textAlign: 'center',
+  },
+  kupongUserRatt: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#1B5E20',
+    marginTop: 1,
+  },
+  kupongTeckenResultHeader: {
+    backgroundColor: '#E3F2FD',
+    borderWidth: 1,
+    borderColor: '#42A5F5',
+    marginLeft: 0,
+  },
+  kupongRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 5,
+    paddingHorizontal: 4,
+  },
+  kupongRowBorder: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#eee',
+  },
+  kupongNr: {
+    width: 20,
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#999',
+    textAlign: 'center',
+  },
+  kupongLag: {
+    width: 120,
+    fontSize: 11,
+    fontWeight: '500',
+    color: '#333',
+    marginLeft: 4,
+  },
+  kupongTeckenBox: {
+    width: 28,
+    height: 24,
+    borderRadius: 5,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 3,
+  },
+  kupongTeckenResult: {
+    backgroundColor: '#E3F2FD',
+    borderWidth: 1.5,
+    borderColor: '#42A5F5',
+    marginLeft: 0,
+  },
+  kupongTeckenResultText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#1565C0',
+  },
+  kupongTeckenCorrect: {
+    backgroundColor: '#E8F5E9',
+    borderWidth: 1.5,
+    borderColor: '#66BB6A',
+  },
+  kupongTeckenCorrectText: {
+    color: '#2E7D32',
+  },
+  kupongTeckenWrong: {
+    backgroundColor: '#FFEBEE',
+    borderWidth: 1.5,
+    borderColor: '#EF5350',
+  },
+  kupongTeckenWrongText: {
+    color: '#C62828',
+  },
+  kupongTeckenNeutral: {
+    backgroundColor: '#F5F5F5',
+    borderWidth: 1,
+    borderColor: '#ddd',
+  },
+  kupongTeckenBoxText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#333',
   },
 });

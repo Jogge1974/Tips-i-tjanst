@@ -21,7 +21,7 @@ interface DashboardData {
   myPosition: number | null;
   myPoang: number | null;
   slutspelsInfo: string;
-  lastResult: { spelomgang: string; antalRatt: number; vinst: number } | null;
+  lastResult: { spelomgang: string; antalRatt: number; insats: number; vinst: number; extraInsats: number; extraVinst: number } | null;
   streak: number;
   hasTipped: boolean;
   hasGardering: boolean;
@@ -178,14 +178,34 @@ export default function HomeScreen() {
           </View>
           <View style={styles.bannerContent}>
             <Text style={styles.bannerTitle}>Stryktipset är LIVE</Text>
-            <Text style={styles.bannerSub}>Följ matcherna i realtid</Text>
+            <Text style={styles.bannerSub}>Följ spelet här →</Text>
           </View>
           <Ionicons name="chevron-forward" size={24} color="#fff" />
         </TouchableOpacity>
       );
     }
 
-    // Waiting or finished
+    // Round finished
+    if (liveState === 'finished') {
+      return (
+        <TouchableOpacity
+          style={[styles.statusBanner, styles.bannerWaiting]}
+          onPress={() => navigation.navigate('Live')}
+          activeOpacity={0.8}
+        >
+          <View style={styles.bannerLeft}>
+            <Ionicons name="checkmark-done-outline" size={28} color="#1B5E20" />
+          </View>
+          <View style={styles.bannerContent}>
+            <Text style={styles.bannerTitleDark}>Omgången avslutad</Text>
+            <Text style={styles.bannerSubDark}>Se resultatet här →</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={24} color="#1B5E20" />
+        </TouchableOpacity>
+      );
+    }
+
+    // Waiting
     return (
       <TouchableOpacity
         style={[styles.statusBanner, styles.bannerWaiting]}
@@ -221,6 +241,58 @@ export default function HomeScreen() {
 
       {/* Status banner */}
       {renderStatusBanner()}
+
+      {/* Last result card - split view */}
+      {lastResult && (() => {
+        const strykTot = lastResult.vinst - lastResult.insats;
+        const ovrigtTot = lastResult.extraVinst - lastResult.extraInsats;
+        const veckoTot = strykTot + ovrigtTot;
+        return (
+          <View style={styles.resultCard}>
+            <Text style={styles.resultCardHeader}>Omgång {lastResult.spelomgang}</Text>
+            <View style={styles.resultCardRow}>
+              <View style={styles.resultCardHalf}>
+                <View style={styles.resultCardTitleRow}>
+                  <Text style={styles.resultCardTitle}>Stryktipset</Text>
+                  <Text style={styles.resultCardRatt}>{lastResult.antalRatt} rätt</Text>
+                </View>
+                <View style={styles.resultCardBody}>
+                  <View>
+                    <Text style={styles.resultCardLine}>Insats: {lastResult.insats} kr</Text>
+                    <Text style={styles.resultCardLine}>Vinst: {lastResult.vinst} kr</Text>
+                  </View>
+                  <Text style={[
+                    styles.resultCardTotal,
+                    strykTot >= 0 ? styles.positive : styles.negative,
+                  ]}>{strykTot >= 0 ? '+' : ''}{strykTot} kr</Text>
+                </View>
+              </View>
+              <View style={styles.resultCardDivider} />
+              <View style={styles.resultCardHalf}>
+                <View style={styles.resultCardTitleRow}>
+                  <Text style={styles.resultCardTitle}>Övrigt</Text>
+                </View>
+                <View style={styles.resultCardBody}>
+                  <View>
+                    <Text style={styles.resultCardLine}>Insats: {lastResult.extraInsats} kr</Text>
+                    <Text style={styles.resultCardLine}>Vinst: {lastResult.extraVinst} kr</Text>
+                  </View>
+                  <Text style={[
+                    styles.resultCardTotal,
+                    ovrigtTot >= 0 ? styles.positive : styles.negative,
+                  ]}>{ovrigtTot >= 0 ? '+' : ''}{ovrigtTot} kr</Text>
+                </View>
+              </View>
+            </View>
+            <View style={styles.resultCardSummary}>
+              <Text style={[
+                styles.resultCardSummaryText,
+                veckoTot >= 0 ? styles.positive : styles.negative,
+              ]}>Vecka: {veckoTot >= 0 ? '+' : ''}{veckoTot} kr</Text>
+            </View>
+          </View>
+        );
+      })()}
 
       {/* Dashboard grid */}
       <View style={styles.grid}>
@@ -264,27 +336,14 @@ export default function HomeScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Last result + streak row */}
-      {(lastResult || streak > 0) && (
+      {/* Streak row */}
+      {streak > 0 && (
         <View style={styles.grid}>
-          {lastResult && (
-            <View style={styles.cardSmall}>
-              <Text style={styles.cardLabel}>Senaste resultat</Text>
-              <Text style={styles.cardValueMd}>{lastResult.antalRatt} rätt</Text>
-              {lastResult.vinst > 0 && (
-                <Text style={styles.positive}>{lastResult.vinst} kr vinst</Text>
-              )}
-              <Text style={styles.cardMeta}>Omgång {lastResult.spelomgang}</Text>
-            </View>
-          )}
-
-          {streak > 0 && (
-            <View style={styles.cardSmall}>
-              <Text style={styles.cardLabel}>Streak 🔥</Text>
-              <Text style={styles.cardValueMd}>{streak} omgångar</Text>
-              <Text style={styles.cardMeta}>i rad med 10+ rätt</Text>
-            </View>
-          )}
+          <View style={styles.cardSmall}>
+            <Text style={styles.cardLabel}>Streak 🔥</Text>
+            <Text style={styles.cardValueMd}>{streak} omgångar</Text>
+            <Text style={styles.cardMeta}>i rad med 10+ rätt</Text>
+          </View>
         </View>
       )}
 
@@ -363,6 +422,31 @@ const styles = StyleSheet.create({
   cardMeta: { fontSize: 12, color: '#999', marginTop: 2 },
   positive: { color: '#2E7D32', fontWeight: '600' },
   negative: { color: '#C62828', fontWeight: '600' },
+
+  // Result card (split view)
+  resultCard: {
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  resultCardHeader: { fontSize: 12, fontWeight: '600', color: '#888', textTransform: 'uppercase', marginBottom: 10 },
+  resultCardRow: { flexDirection: 'row' },
+  resultCardHalf: { flex: 1 },
+  resultCardDivider: { width: 1, backgroundColor: '#E0E0E0', marginHorizontal: 12 },
+  resultCardTitleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  resultCardTitle: { fontSize: 13, fontWeight: '700', color: '#333' },
+  resultCardRatt: { fontSize: 13, fontWeight: '700', color: '#333' },
+  resultCardBody: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  resultCardLine: { fontSize: 11, color: '#999', marginBottom: 2 },
+  resultCardTotal: { fontSize: 13, fontWeight: '700' },
+  resultCardSummary: { alignItems: 'flex-end', marginTop: 10, borderTopWidth: 1, borderTopColor: '#E0E0E0', paddingTop: 8 },
+  resultCardSummaryText: { fontSize: 14, fontWeight: '700' },
 
   // Economy details
   ecoRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 },
