@@ -37,6 +37,28 @@ export default function MinSidaScreen() {
   const [analysisModal, setAnalysisModal] = useState<{
     visible: boolean; home: any; away: any; standings: any[]; league: string; eventHome: string; eventAway: string; loading: boolean;
   }>({ visible: false, home: null, away: null, standings: [], league: '', eventHome: '', eventAway: '', loading: false });
+  const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+
+  const fetchAiAnalysis = async (home: string, away: string, league: string) => {
+    setAiAnalysis(null);
+    setAiError(null);
+    setAiLoading(true);
+    try {
+      const result = await api.analyzeMatch(home, away, league);
+      if (result.error === 'rate_limit') {
+        setAiError(result.message || 'Försök igen om 1 minut.');
+      } else if (result.error) {
+        setAiError(result.message || 'Kunde inte hämta AI-analys.');
+      } else {
+        setAiAnalysis(result.analysis || null);
+      }
+    } catch {
+      setAiError('Kunde inte hämta AI-analys.');
+    }
+    setAiLoading(false);
+  };
 
   const openAnalysis = async (matchInfo: MatchInfo) => {
     const teams = matchInfo.lag?.split(' - ') || matchInfo.lag?.split('-') || [];
@@ -328,9 +350,35 @@ export default function MinSidaScreen() {
                 </>
               )}
 
+              {/* AI-analys */}
+              {!analysisModal.loading && (
+                <View style={styles.aiSection}>
+                  {!aiAnalysis && !aiLoading && !aiError && (
+                    <TouchableOpacity
+                      style={styles.aiBtn}
+                      onPress={() => fetchAiAnalysis(analysisModal.eventHome, analysisModal.eventAway, analysisModal.league)}
+                    >
+                      <Text style={styles.aiBtnText}>🤖 AI-analys av matchen</Text>
+                    </TouchableOpacity>
+                  )}
+                  {aiLoading && <ActivityIndicator color="#6A1B9A" style={{ marginVertical: 12 }} />}
+                  {aiError && (
+                    <View style={styles.aiErrorBox}>
+                      <Text style={styles.aiErrorText}>{aiError}</Text>
+                    </View>
+                  )}
+                  {aiAnalysis && (
+                    <View style={styles.aiResultBox}>
+                      <Text style={styles.aiResultLabel}>🤖 AI-analys</Text>
+                      <Text style={styles.aiResultText}>{aiAnalysis}</Text>
+                    </View>
+                  )}
+                </View>
+              )}
+
               <TouchableOpacity
                 style={styles.closeAnalysisBtn}
-                onPress={() => setAnalysisModal(prev => ({ ...prev, visible: false }))}
+                onPress={() => { setAnalysisModal(prev => ({ ...prev, visible: false })); setAiAnalysis(null); setAiError(null); }}
               >
                 <Text style={styles.closeAnalysisBtnText}>Stäng</Text>
               </TouchableOpacity>
@@ -486,9 +534,35 @@ export default function MinSidaScreen() {
                 </>
               )}
 
+              {/* AI-analys */}
+              {!analysisModal.loading && (
+                <View style={styles.aiSection}>
+                  {!aiAnalysis && !aiLoading && !aiError && (
+                    <TouchableOpacity
+                      style={styles.aiBtn}
+                      onPress={() => fetchAiAnalysis(analysisModal.eventHome, analysisModal.eventAway, analysisModal.league)}
+                    >
+                      <Text style={styles.aiBtnText}>🤖 AI-analys av matchen</Text>
+                    </TouchableOpacity>
+                  )}
+                  {aiLoading && <ActivityIndicator color="#6A1B9A" style={{ marginVertical: 12 }} />}
+                  {aiError && (
+                    <View style={styles.aiErrorBox}>
+                      <Text style={styles.aiErrorText}>{aiError}</Text>
+                    </View>
+                  )}
+                  {aiAnalysis && (
+                    <View style={styles.aiResultBox}>
+                      <Text style={styles.aiResultLabel}>🤖 AI-analys</Text>
+                      <Text style={styles.aiResultText}>{aiAnalysis}</Text>
+                    </View>
+                  )}
+                </View>
+              )}
+
               <TouchableOpacity
                 style={styles.closeAnalysisBtn}
-                onPress={() => setAnalysisModal(prev => ({ ...prev, visible: false }))}
+                onPress={() => { setAnalysisModal(prev => ({ ...prev, visible: false })); setAiAnalysis(null); setAiError(null); }}
               >
                 <Text style={styles.closeAnalysisBtnText}>Stäng</Text>
               </TouchableOpacity>
@@ -716,9 +790,35 @@ export default function MinSidaScreen() {
               </>
             )}
 
+            {/* AI-analys */}
+            {!analysisModal.loading && (
+              <View style={styles.aiSection}>
+                {!aiAnalysis && !aiLoading && !aiError && (
+                  <TouchableOpacity
+                    style={styles.aiBtn}
+                    onPress={() => fetchAiAnalysis(analysisModal.eventHome, analysisModal.eventAway, analysisModal.league)}
+                  >
+                    <Text style={styles.aiBtnText}>🤖 AI-analys av matchen</Text>
+                  </TouchableOpacity>
+                )}
+                {aiLoading && <ActivityIndicator color="#6A1B9A" style={{ marginVertical: 12 }} />}
+                {aiError && (
+                  <View style={styles.aiErrorBox}>
+                    <Text style={styles.aiErrorText}>{aiError}</Text>
+                  </View>
+                )}
+                {aiAnalysis && (
+                  <View style={styles.aiResultBox}>
+                    <Text style={styles.aiResultLabel}>🤖 AI-analys</Text>
+                    <Text style={styles.aiResultText}>{aiAnalysis}</Text>
+                  </View>
+                )}
+              </View>
+            )}
+
             <TouchableOpacity
               style={styles.closeAnalysisBtn}
-              onPress={() => setAnalysisModal(prev => ({ ...prev, visible: false }))}
+              onPress={() => { setAnalysisModal(prev => ({ ...prev, visible: false })); setAiAnalysis(null); setAiError(null); }}
             >
               <Text style={styles.closeAnalysisBtnText}>Stäng</Text>
             </TouchableOpacity>
@@ -1711,6 +1811,50 @@ const styles = StyleSheet.create({
     color: '#333',
     fontSize: 14,
     fontWeight: '600',
+  },
+  aiSection: {
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  aiBtn: {
+    backgroundColor: '#6A1B9A',
+    borderRadius: 8,
+    padding: 12,
+    alignItems: 'center',
+  },
+  aiBtnText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  aiErrorBox: {
+    backgroundColor: '#FFF3E0',
+    borderRadius: 8,
+    padding: 12,
+    borderLeftWidth: 3,
+    borderLeftColor: '#E65100',
+  },
+  aiErrorText: {
+    color: '#E65100',
+    fontSize: 13,
+  },
+  aiResultBox: {
+    backgroundColor: '#F3E5F5',
+    borderRadius: 8,
+    padding: 12,
+    borderLeftWidth: 3,
+    borderLeftColor: '#6A1B9A',
+  },
+  aiResultLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#6A1B9A',
+    marginBottom: 6,
+  },
+  aiResultText: {
+    fontSize: 13,
+    color: '#333',
+    lineHeight: 20,
   },
   toast: {
     position: 'absolute',

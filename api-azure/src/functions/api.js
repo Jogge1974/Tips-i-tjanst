@@ -18,6 +18,10 @@ const dbConfig = {
 const SVENSKA_SPEL_BASE = 'https://api.www.svenskaspel.se/external/1/draw/stryktipset/';
 const SVENSKA_SPEL_KEY = '45c5fc62-8386-4e59-b8ab-06b7f10f505d';
 
+// Google Gemini API
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent';
+
 let pool = null;
 
 function getPool() {
@@ -2401,6 +2405,43 @@ app.http('api', {
                     return await getPushSettings(params);
                 case 'updatePushSettings':
                     return await updatePushSettings(params);
+                case 'analyzeMatch': {
+                    if (!GEMINI_API_KEY) return jsonResponse({ error: 'AI not configured' }, 503);
+                    const hemmalag = params.hemmalag;
+                    const bortalag = params.bortalag;
+                    const serie = params.serie || 'okänd serie';
+                    if (!hemmalag || !bortalag) return jsonResponse({ error: 'hemmalag and bortalag required' }, 400);
+
+                    const prompt = `Du är en fotbollsexpert. Analysera matchen ${hemmalag} vs ${bortalag} i ${serie}. Ge en kort analys (max 150 ord) på svenska om lagets form, styrkor/svagheter och troligt utfall (1/X/2). Avsluta med din rekommendation.`;
+
+                    try {
+                        const geminiResp = await fetch(GEMINI_URL, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'X-goog-api-key': GEMINI_API_KEY },
+                            body: JSON.stringify({
+                                contents: [{ parts: [{ text: prompt }] }],
+                                generationConfig: { temperature: 0.7 }
+                            })
+                        });
+
+                        if (geminiResp.status === 429) {
+                            const errBody = await geminiResp.text();
+                            return jsonResponse({ error: 'rate_limit', message: 'För många förfrågningar. Försök igen om 1 minut.', details: errBody }, 429);
+                        }
+                        if (!geminiResp.ok) {
+                            const errText = await geminiResp.text();
+                            return jsonResponse({ error: 'AI error', status: geminiResp.status, details: errText }, 502);
+                        }
+
+                        const geminiData = await geminiResp.json();
+                        const candidate = geminiData?.candidates?.[0];
+                        const text = candidate?.content?.parts?.[0]?.text || 'Inget svar från AI.';
+                        const finishReason = candidate?.finishReason || 'unknown';
+                        return jsonResponse({ analysis: text, hemmalag, bortalag, serie, finishReason });
+                    } catch (err) {
+                        return jsonResponse({ error: 'AI request failed', message: err.message }, 500);
+                    }
+                }
                 case 'runNotificationsNow': {
                     await checkAndSendNotifications(context);
                     return jsonResponse({ success: true, ranAt: new Date().toISOString() });
@@ -2778,7 +2819,21 @@ async function generateSystem(params) {
     });
 
     // Run smart reduction
-    const { rows, grupper, garantiNiva } = smartReduce(selections);
+    const result = smartReduce(selections);
+
+    // Debug: log what was classified
+    const debugInfo = {
+        hel: selections.filter(s => s.isHelgardering).map(s => s.matchNr),
+        halv: selections.filter(s => s.isHalvgardering).map(s => s.matchNr),
+        mat: selections.filter(s => s.isMatematisk).map(s => s.matchNr),
+        enkel: selections.filter(s => s.isEnkeltecken).map(s => s.matchNr),
+    };
+
+    if (result.error) {
+        return jsonResponse({ error: result.error, debug: debugInfo }, 400);
+    }
+
+    const { rows, grupper, garantiNiva } = result;
 
     // Save to database
     const db = getPool();
@@ -2806,57 +2861,157 @@ async function generateSystem(params) {
         garantiNiva,
         drawNumber,
         fileContent,
+        debug: debugInfo,
     });
 }
 
 // ===== REDUCTION ALGORITHM FUNCTIONS =====
 
+// Hardcoded optimal covering codes
+// 4-0: Ternary (3^4=81), 9 codewords, 12-rätts garanti
+const CODE_4_0 = [
+    [0,0,0,0], [0,1,1,1], [0,2,2,2], [1,0,1,2], [1,1,2,0],
+    [1,2,0,1], [2,0,2,1], [2,1,0,2], [2,2,1,0]
+];
+
+// 0-7: Binary (2^7=128), 16 codewords (Hamming [7,4]), 12-rätts garanti
+const CODE_0_7 = [
+    [0,0,0,0,0,0,0], [1,1,0,1,0,0,1], [0,1,0,1,0,1,0], [1,0,0,0,0,1,1],
+    [1,0,0,1,1,0,0], [0,1,0,0,1,0,1], [1,1,0,0,1,1,0], [0,0,0,1,1,1,1],
+    [1,1,1,0,0,0,0], [0,0,1,1,0,0,1], [1,0,1,1,0,1,0], [0,1,1,0,0,1,1],
+    [0,1,1,1,1,0,0], [1,0,1,0,1,0,1], [0,0,1,0,1,1,0], [1,1,1,1,1,1,1]
+];
+
+// 3-3: Mixed (3^3 × 2^3 = 216), 24 codewords, 12-rätts garanti
+// First 3 positions = ternary (hel), last 3 = binary (halv)
+const CODE_3_3 = [
+    [2,1,0,1,0,0], [2,1,0,0,1,1], [1,0,1,1,0,0], [1,0,1,0,1,1],
+    [0,2,2,1,0,0], [0,2,2,0,1,1], [2,1,0,1,0,1], [2,1,0,0,1,0],
+    [1,2,0,1,1,0], [1,2,0,0,0,1], [1,1,2,1,1,1], [1,1,2,0,0,0],
+    [2,2,1,1,1,1], [2,2,1,0,0,0], [2,0,2,1,1,0], [2,0,2,0,0,1],
+    [1,0,1,1,0,1], [1,0,1,0,1,0], [0,2,2,1,0,1], [0,2,2,0,1,0],
+    [0,1,1,1,1,0], [0,1,1,0,0,1], [0,0,0,1,1,1], [0,0,0,0,0,0]
+];
+
 function smartReduce(selections) {
-    const variablePositions = [];
+    const helPositions = [];
+    const halvPositions = [];
+    const matPositions = [];
+
     for (let i = 0; i < selections.length; i++) {
-        if (selections[i].isHalvgardering || selections[i].isHelgardering)
-            variablePositions.push(i);
+        if (selections[i].isHelgardering) helPositions.push(i);
+        else if (selections[i].isHalvgardering) halvPositions.push(i);
+        else if (selections[i].isMatematisk) matPositions.push(i);
     }
 
-    if (variablePositions.length === 0) {
+    const hel = helPositions.length;
+    const halv = halvPositions.length;
+
+    if (hel === 0 && halv === 0) {
+        // Only enkeltecken + eventuellt matematiska
         return { rows: generateAllRows(selections), grupper: 0, garantiNiva: 13 };
     }
 
-    // Sort: helgarderingar first (3 tecken), then halvgarderingar (2 tecken)
-    // This ensures balanced distribution across groups
-    variablePositions.sort((a, b) => {
-        const diff = selections[b].antalTecken - selections[a].antalTecken;
-        return diff !== 0 ? diff : a - b;
+    // Try to decompose (hel, halv) into blocks of (4,0), (0,7), (3,3)
+    const decomp = decomposeSystem(hel, halv);
+    if (!decomp) {
+        return { rows: null, grupper: 0, garantiNiva: 0, error: `Kombinationen ${hel}-${halv} stöds inte. Giltiga: 4-0, 0-7, 3-3 och kombinationer av dessa.` };
+    }
+
+    const { a, b, c } = decomp; // a st (4,0), b st (0,7), c st (3,3)
+
+    // Assign positions to blocks
+    // Order: helPositions first consumed by (4,0) blocks, then by (3,3) blocks
+    // halvPositions consumed by (0,7) blocks, then by (3,3) blocks
+    const blocks = [];
+    let helIdx = 0;
+    let halvIdx = 0;
+
+    for (let i = 0; i < a; i++) {
+        blocks.push({ type: '4-0', positions: helPositions.slice(helIdx, helIdx + 4), code: CODE_4_0 });
+        helIdx += 4;
+    }
+    for (let i = 0; i < b; i++) {
+        blocks.push({ type: '0-7', positions: halvPositions.slice(halvIdx, halvIdx + 7), code: CODE_0_7 });
+        halvIdx += 7;
+    }
+    for (let i = 0; i < c; i++) {
+        const helPart = helPositions.slice(helIdx, helIdx + 3);
+        const halvPart = halvPositions.slice(halvIdx, halvIdx + 3);
+        blocks.push({ type: '3-3', positions: [...helPart, ...halvPart], code: CODE_3_3 });
+        helIdx += 3;
+        halvIdx += 3;
+    }
+
+    // Convert each block's code indices to actual signs
+    const blockRows = blocks.map(block => {
+        return block.code.map(codeword =>
+            codeword.map((val, idx) => {
+                const pos = block.positions[idx];
+                return selections[pos].getTecken()[val];
+            })
+        );
     });
 
-    let variabelMatematiskt = 1;
-    for (const pos of variablePositions)
-        variabelMatematiskt *= selections[pos].antalTecken;
-
-    let antalGrupper = 1;
-    if (variabelMatematiskt > 243) {
-        for (let tryGroups = 2; tryGroups <= 4; tryGroups++) {
-            const testGroupMat = new Array(tryGroups).fill(1);
-            for (let i = 0; i < variablePositions.length; i++)
-                testGroupMat[i % tryGroups] *= selections[variablePositions[i]].antalTecken;
-            if (testGroupMat.every(m => m <= 243)) {
-                antalGrupper = tryGroups;
-                break;
+    // Cartesian product of all blocks
+    let combined = [[]];
+    for (const bRows of blockRows) {
+        const newCombined = [];
+        for (const existing of combined) {
+            for (const row of bRows) {
+                newCombined.push([...existing, ...row]);
             }
         }
-        if (antalGrupper === 1) antalGrupper = 4;
+        combined = newCombined;
     }
 
-    if (antalGrupper === 1) {
-        const rows = reduceSystem(selections);
-        return { rows, grupper: 1, garantiNiva: 12 };
-    } else {
-        const groupAssignment = new Array(selections.length).fill(0);
-        for (let i = 0; i < variablePositions.length; i++)
-            groupAssignment[variablePositions[i]] = (i % antalGrupper) + 1;
-        const rows = reduceCombinedSystem(selections, groupAssignment, antalGrupper);
-        return { rows, grupper: antalGrupper, garantiNiva: 13 - antalGrupper };
+    // Build full 13-position rows
+    const baseRows = combined.map(combo => {
+        const fullRow = new Array(13);
+        let comboIdx = 0;
+        const allBlockPositions = blocks.flatMap(bl => bl.positions);
+
+        for (let i = 0; i < 13; i++) {
+            const blockPosIdx = allBlockPositions.indexOf(i);
+            if (blockPosIdx >= 0) {
+                fullRow[i] = combo[blockPosIdx];
+            } else if (selections[i].isEnkeltecken) {
+                fullRow[i] = selections[i].getTecken()[0];
+            } else {
+                fullRow[i] = '0'; // matematisk placeholder
+            }
+        }
+        return fullRow.join('');
+    });
+
+    // Expand matematisk positions
+    const rows = expandMatPositions(selections, baseRows);
+
+    const totalBlocks = a + b + c;
+    const garantiNiva = totalBlocks === 1 ? 12 : 13 - totalBlocks;
+
+    return { rows, grupper: totalBlocks, garantiNiva };
+}
+
+// Decompose (hel, halv) into a×(4,0) + b×(0,7) + c×(3,3)
+function decomposeSystem(hel, halv) {
+    // hel = 4a + 3c, halv = 7b + 3c → c must satisfy both
+    for (let c = 0; c <= Math.min(Math.floor(hel / 3), Math.floor(halv / 3)); c++) {
+        const remHel = hel - 3 * c;
+        const remHalv = halv - 3 * c;
+        if (remHel % 4 === 0 && remHalv % 7 === 0) {
+            return { a: remHel / 4, b: remHalv / 7, c };
+        }
     }
+    // Also try c consuming all halv first
+    for (let c = Math.min(Math.floor(hel / 3), Math.floor(halv / 3)); c >= 0; c--) {
+        const remHel = hel - 3 * c;
+        const remHalv = halv - 3 * c;
+        if (remHel >= 0 && remHalv >= 0 && remHel % 4 === 0 && remHalv % 7 === 0) {
+            return { a: remHel / 4, b: remHalv / 7, c };
+        }
+    }
+    return null;
 }
 
 function generateAllRows(selections) {

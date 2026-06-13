@@ -218,4 +218,17 @@ export const api = {
     if (!response.ok) throw new Error('Kunde inte avsluta omgång');
     return response.json();
   },
+
+  async analyzeMatch(hemmalag: string, bortalag: string, serie?: string): Promise<{ analysis?: string; error?: string; message?: string }> {
+    const response = await fetch(`${API_BASE_URL}?action=analyzeMatch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hemmalag, bortalag, serie: serie || '' }),
+    });
+    if (response.status === 429) {
+      return { error: 'rate_limit', message: 'För många förfrågningar. Försök igen om 1 minut.' };
+    }
+    if (!response.ok) throw new Error('Kunde inte hämta analys');
+    return response.json();
+  },
 };
