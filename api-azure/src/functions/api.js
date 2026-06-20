@@ -2149,7 +2149,10 @@ async function checkAndSendNotifications(context) {
     const events = forecast.events;
     const started = events.filter(e => e.sportEventStatus !== 'Inte startat');
     const finished = events.filter(e => e.isFinished || e.cancelled);
-    const inProgress = started.length > 0 && finished.length < 13;
+
+    const currentlyPlaying = events.filter(e => e.sportEventStatus !== 'Inte startat' && !e.isFinished && !e.cancelled);
+    const inProgress = currentlyPlaying.length > 0; // At least one match actively playing right now
+
     const allDone = finished.length === 13;
 
     // Get system rows for calculating rätt
