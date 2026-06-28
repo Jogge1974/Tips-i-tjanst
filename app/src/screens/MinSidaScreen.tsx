@@ -17,7 +17,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../context/AuthContext';
 import { api, GameStatus, MatchInfo, Gardering } from '../services/api';
 
-const API_BASE_URL = 'https://tipstjanst-api-bpdxhah7f9hxhpce.westeurope-01.azurewebsites.net/api/api';
+const API_BASE_URL = 'https://tipsitjanst-api.azurewebsites.net/api/api';
 
 export default function MinSidaScreen() {
   const { user } = useAuth();

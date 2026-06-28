@@ -20,7 +20,7 @@ import { useAuth } from '../context/AuthContext';
 import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 
-const API_BASE_URL = 'https://tipstjanst-api-bpdxhah7f9hxhpce.westeurope-01.azurewebsites.net/api/api';
+const API_BASE_URL = 'https://tipsitjanst-api.azurewebsites.net/api/api';
 
 interface AdminMatch {
   matchNr: number;

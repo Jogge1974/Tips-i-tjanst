@@ -1,5 +1,6 @@
 // API Base URL - Azure Function App
-export const API_BASE_URL = 'https://tipstjanst-api-bpdxhah7f9hxhpce.westeurope-01.azurewebsites.net/api/api';
+export const API_BASE_URL = 'https://tipsitjanst-api.azurewebsites.net/api/api';
+// Gammal (utgangen subscription): 'https://tipstjanst-api-bpdxhah7f9hxhpce.westeurope-01.azurewebsites.net/api/api'
 // Lokal test: 'http://localhost:7071/api/api'
 // Gammal PHP: 'http://malte.liveidrott.se.linux225.unoeuro-server.com/api/api.php'
 

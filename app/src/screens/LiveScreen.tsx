@@ -14,7 +14,7 @@ import {
 import { api } from '../services/api';
 import { Ionicons } from '@expo/vector-icons';
 
-const API_BASE_URL = 'https://tipstjanst-api-bpdxhah7f9hxhpce.westeurope-01.azurewebsites.net/api/api';
+const API_BASE_URL = 'https://tipsitjanst-api.azurewebsites.net/api/api';
 
 interface LiveEvent {
   eventNumber: number;
