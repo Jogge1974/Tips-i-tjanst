@@ -36,7 +36,7 @@ interface LiveDraw {
   drawState: string;
   closeTime: string;
   turnover: string;
-  distribution?: { winners: number; amount: string; name: string }[];
+  distribution?: { winners: number; amount: string; name: string; sign?: string; eventNumber?: string }[];
   events: LiveEvent[];
 }
 
@@ -117,6 +117,9 @@ export default function LiveScreen() {
   const [utdelningExpanded, setUtdelningExpanded] = useState(false);
   const [garderingExpanded, setGarderingExpanded] = useState(false);
   const [grundtipsenExpanded, setGrundtipsenExpanded] = useState(false);
+  // Valt utfall (tecken) för "Utdelning vid olika utfall" när en match återstår.
+  // null = följ matchens aktuella liveresultat.
+  const [selectedDistSign, setSelectedDistSign] = useState<string | null>(null);
   const [kupongModal, setKupongModal] = useState<{
     spelomgang: string;
     isSlutspel: number;
@@ -273,23 +276,79 @@ export default function LiveScreen() {
     rightCount[r.correct] = (rightCount[r.correct] || 0) + 1;
   }
 
+  // Välj rätt distributionspost för en vinstgrupp. När en match är oavgjord
+  // publicerar Svenska Spel tre varianter (tecken 1/X/2) för den kvarvarande
+  // matchen. Vi väljer den variant som matchar matchens nuvarande liveresultat
+  // (ej startad = 0-0 = X), samma antagande som antal rätt beräknas med.
+  // signOverride låter oss visa utdelning för ett annat hypotetiskt utfall.
+  const getDistEntry = (numRight: number, signOverride?: string | null) => {
+    if (!draw?.distribution) return undefined;
+    const entries = draw.distribution.filter((d) => {
+      const m = d.name.match(/(\d+)/);
+      return m && parseInt(m[1]) === numRight;
+    });
+    if (entries.length === 0) return undefined;
+    if (entries.length === 1) return entries[0];
+    // Flera teckenvarianter: välj den som matchar valt/aktuellt tecken
+    const splitEventNr = entries[0].eventNumber ? parseInt(entries[0].eventNumber) : null;
+    let sign = signOverride ?? null;
+    if (!sign && splitEventNr) {
+      const ev = draw.events.find((e) => e.eventNumber === splitEventNr);
+      if (ev) sign = getResultSign(ev);
+    }
+    if (sign) {
+      const matched = entries.find((e) => e.sign === sign);
+      if (matched) return matched;
+    }
+    return entries[0];
+  };
+
+  // Upptäck om distributionen är uppdelad på en kvarvarande, oavgjord match
+  // (flera teckenvarianter per vinstgrupp). Returnerar matchen, tillgängliga
+  // tecken och det tecken som gäller just nu.
+  const getDistSplit = () => {
+    if (!draw?.distribution) return null;
+    const byTier: Record<number, typeof draw.distribution> = {};
+    for (const d of draw.distribution) {
+      const m = d.name.match(/(\d+)/);
+      if (!m) continue;
+      const n = parseInt(m[1]);
+      (byTier[n] ||= []).push(d);
+    }
+    for (const key of Object.keys(byTier)) {
+      const entries = byTier[Number(key)];
+      if (entries.length > 1 && entries[0].eventNumber) {
+        const evNr = parseInt(entries[0].eventNumber);
+        const ev = draw.events.find((e) => e.eventNumber === evNr);
+        if (ev) {
+          const signs = Array.from(
+            new Set(entries.map((e) => e.sign).filter(Boolean))
+          ) as string[];
+          return { event: ev, signs, currentSign: getResultSign(ev) };
+        }
+      }
+    }
+    return null;
+  };
+
+  const distSplit = getDistSplit();
+  // Tecknet som utdelningstabellen visar: användarens val, annars aktuellt utfall
+  const effectiveDistSign = distSplit
+    ? selectedDistSign ?? distSplit.currentSign
+    : null;
+
   // Beräkna vinst från distribution
   const calculateWinnings = (): number => {
     if (!draw?.distribution || !rows.length) return 0;
     let total = 0;
-    for (const dist of draw.distribution) {
-      // Parse "13 rätt" -> 13
-      const match = dist.name.match(/(\d+)/);
-      if (!match) continue;
-      const numRight = parseInt(match[1]);
-      if (numRight < 10) continue;
-      // Räkna hur många av våra rader som har detta antal rätt
+    for (const numRight of [13, 12, 11, 10]) {
       const count = rightCount[numRight] || 0;
-      if (count > 0) {
-        // Parse "2910526,00" -> 2910526
-        const amount = parseFloat(dist.amount.replace(',', '.'));
-        total += count * amount;
-      }
+      if (count <= 0) continue;
+      const dist = getDistEntry(numRight);
+      if (!dist) continue;
+      // Parse "2910526,00" -> 2910526
+      const amount = parseFloat(dist.amount.replace(',', '.'));
+      total += count * amount;
     }
     return Math.round(total);
   };
@@ -369,8 +428,7 @@ export default function LiveScreen() {
 
   // Parse distribution amounts for display
   const getDistAmount = (numRight: number): string => {
-    if (!draw?.distribution) return '-';
-    const dist = draw.distribution.find(d => d.name.includes(`${numRight}`));
+    const dist = getDistEntry(numRight, effectiveDistSign);
     if (!dist) return '-';
     const amount = parseFloat(dist.amount.replace(',', '.'));
     return Math.round(amount).toLocaleString('sv-SE');
@@ -671,6 +729,33 @@ export default function LiveScreen() {
           </View>
           {utdelningExpanded && (
             <View style={styles.expandableContent}>
+              {distSplit && (
+                <View style={styles.outcomeBox}>
+                  <Text style={styles.outcomeTitle}>Utdelning vid olika utfall</Text>
+                  <Text style={styles.outcomeMatch}>
+                    {distSplit.event.home} – {distSplit.event.away}
+                  </Text>
+                  <View style={styles.outcomeButtons}>
+                    {(['1', 'X', '2'] as const).map((s) => {
+                      const active = effectiveDistSign === s;
+                      const isCurrent = distSplit.currentSign === s;
+                      return (
+                        <TouchableOpacity
+                          key={s}
+                          style={[styles.outcomeBtn, active && styles.outcomeBtnActive]}
+                          onPress={() => setSelectedDistSign(s)}
+                          activeOpacity={0.8}
+                        >
+                          <Text style={[styles.outcomeBtnText, active && styles.outcomeBtnTextActive]}>{s}</Text>
+                          {isCurrent && (
+                            <Text style={[styles.outcomeBtnNow, active && styles.outcomeBtnNowActive]}>nu</Text>
+                          )}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </View>
+              )}
               {[13, 12, 11, 10].map((n) => (
                 <View key={n} style={styles.rightRow}>
                   <Text style={styles.rightLabel}>{n} rätt</Text>
@@ -1304,6 +1389,62 @@ const styles = StyleSheet.create({
     color: '#666',
     width: 50,
     textAlign: 'right',
+  },
+  outcomeBox: {
+    backgroundColor: '#f1f8f2',
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#d4e8d7',
+  },
+  outcomeTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1B5E20',
+    marginBottom: 2,
+  },
+  outcomeMatch: {
+    fontSize: 13,
+    color: '#333',
+    marginBottom: 10,
+  },
+  outcomeButtons: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  outcomeBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    borderColor: '#c8dccb',
+    backgroundColor: '#fff',
+  },
+  outcomeBtnActive: {
+    borderColor: '#1B5E20',
+    backgroundColor: '#1B5E20',
+  },
+  outcomeBtnText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#1B5E20',
+  },
+  outcomeBtnTextActive: {
+    color: '#fff',
+  },
+  outcomeBtnNow: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#1B5E20',
+    marginLeft: 5,
+    textTransform: 'uppercase',
+  },
+  outcomeBtnNowActive: {
+    color: '#c8e6c9',
   },
   tabBar: {
     flexDirection: 'row',

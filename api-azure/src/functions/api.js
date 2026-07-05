@@ -70,6 +70,20 @@ async function speletOppet(connection) {
     return 1; // Monday-Thursday before 12: tips open
 }
 
+// Ensure message-related schema exists (runs once per warm instance)
+let messageSchemaEnsured = false;
+async function ensureMessageSchema(db) {
+    if (messageSchemaEnsured) return;
+    const ignore = ['ER_DUP_FIELDNAME', 'ER_NO_SUCH_TABLE'];
+    try {
+        await db.query('ALTER TABLE TIT_admin ADD COLUMN message TEXT NULL');
+    } catch (e) { if (!ignore.includes(e.code)) throw e; }
+    try {
+        await db.query('ALTER TABLE TIT_push_tokens ADD COLUMN notis_meddelande TINYINT(1) DEFAULT 1');
+    } catch (e) { if (!ignore.includes(e.code)) throw e; }
+    messageSchemaEnsured = true;
+}
+
 // GET USERS
 async function getUsers() {
     const db = getPool();
@@ -113,6 +127,9 @@ async function getDashboard(query) {
     if (!userId) return jsonResponse({ error: 'Saknar userId' }, 400);
 
     const db = getPool();
+    await ensureMessageSchema(db);
+    const [adminMsgRows] = await db.query('SELECT message FROM TIT_admin LIMIT 1');
+    const adminMessage = adminMsgRows.length ? (adminMsgRows[0].message || '') : '';
     const status = await speletOppet(db);
 
     // Current round info
@@ -281,6 +298,7 @@ async function getDashboard(query) {
         tipsrad: tipsradRows,
         liveState,
         systemInfo,
+        message: adminMessage,
     });
 }
 
@@ -1876,6 +1894,7 @@ async function registerPushToken(params) {
         notis_ny_kupong TINYINT(1) DEFAULT 1,
         notis_spelstopp TINYINT(1) DEFAULT 1,
         notis_live TINYINT(1) DEFAULT 1,
+        notis_meddelande TINYINT(1) DEFAULT 1,
         createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
         updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         UNIQUE KEY unique_user_token (userId, pushToken)
@@ -1906,27 +1925,71 @@ async function getPushSettings(params) {
     const { userId } = params;
     if (!userId) return jsonResponse({ error: 'userId krävs' }, 400);
     const db = getPool();
+    await ensureMessageSchema(db);
     const [rows] = await db.query(
-        'SELECT notis_ny_kupong, notis_spelstopp, notis_live FROM TIT_push_tokens WHERE userId = ? LIMIT 1',
+        'SELECT notis_ny_kupong, notis_spelstopp, notis_live, notis_meddelande FROM TIT_push_tokens WHERE userId = ? LIMIT 1',
         [userId]
     );
     if (!rows.length) {
-        return jsonResponse({ notis_ny_kupong: 1, notis_spelstopp: 1, notis_live: 1 });
+        return jsonResponse({ notis_ny_kupong: 1, notis_spelstopp: 1, notis_live: 1, notis_meddelande: 1 });
     }
     return jsonResponse(rows[0]);
 }
 
 async function updatePushSettings(params) {
-    const { userId, notis_ny_kupong, notis_spelstopp, notis_live } = params;
+    const { userId, notis_ny_kupong, notis_spelstopp, notis_live, notis_meddelande } = params;
     if (!userId) return jsonResponse({ error: 'userId krävs' }, 400);
     const db = getPool();
+    await ensureMessageSchema(db);
     await db.query(
         `UPDATE TIT_push_tokens 
-         SET notis_ny_kupong = ?, notis_spelstopp = ?, notis_live = ?
+         SET notis_ny_kupong = ?, notis_spelstopp = ?, notis_live = ?, notis_meddelande = ?
          WHERE userId = ?`,
-        [notis_ny_kupong ? 1 : 0, notis_spelstopp ? 1 : 0, notis_live ? 1 : 0, userId]
+        [notis_ny_kupong ? 1 : 0, notis_spelstopp ? 1 : 0, notis_live ? 1 : 0, notis_meddelande ? 1 : 0, userId]
     );
     return jsonResponse({ success: true });
+}
+
+// SAVE ADMIN MESSAGE - update the message shown on home screen
+async function saveAdminMessage(params) {
+    const userId = parseInt(params.userId || params.get?.('userId'));
+    if (userId !== 1) return jsonResponse({ error: 'Ej behörig' }, 403);
+    const db = getPool();
+    await ensureMessageSchema(db);
+    const message = (params.message ?? '').toString();
+    await db.query('UPDATE TIT_admin SET message = ?', [message]);
+    return jsonResponse({ success: true, message });
+}
+
+// SEND MESSAGE PUSH - push the current admin message to all opted-in users
+async function sendMessagePush(params) {
+    const userId = parseInt(params.userId || params.get?.('userId'));
+    if (userId !== 1) return jsonResponse({ error: 'Ej behörig' }, 403);
+    const db = getPool();
+    await ensureMessageSchema(db);
+    const [adminRows] = await db.query('SELECT message FROM TIT_admin LIMIT 1');
+    const message = adminRows.length ? (adminRows[0].message || '').trim() : '';
+    if (!message) return jsonResponse({ error: 'Inget meddelande att skicka' }, 400);
+    const [tokens] = await db.query('SELECT DISTINCT pushToken FROM TIT_push_tokens WHERE notis_meddelande = 1');
+    const pushTokens = tokens.map(t => t.pushToken);
+    if (!pushTokens.length) return jsonResponse({ success: true, sent: 0 });
+    await sendExpoPush(pushTokens, '📢 Meddelande', message, { type: 'message' });
+    return jsonResponse({ success: true, sent: pushTokens.length });
+}
+
+// SEND PUSH ONLY - send a one-off push notification WITHOUT saving to DB
+async function sendPushOnly(params) {
+    const userId = parseInt(params.userId || params.get?.('userId'));
+    if (userId !== 1) return jsonResponse({ error: 'Ej behörig' }, 403);
+    const message = (params.message ?? '').toString().trim();
+    if (!message) return jsonResponse({ error: 'Inget meddelande att skicka' }, 400);
+    const db = getPool();
+    await ensureMessageSchema(db);
+    const [tokens] = await db.query('SELECT DISTINCT pushToken FROM TIT_push_tokens WHERE notis_meddelande = 1');
+    const pushTokens = tokens.map(t => t.pushToken);
+    if (!pushTokens.length) return jsonResponse({ success: true, sent: 0 });
+    await sendExpoPush(pushTokens, '📢 Meddelande', message, { type: 'message' });
+    return jsonResponse({ success: true, sent: pushTokens.length });
 }
 
 async function sendExpoPush(tokens, title, body, data = {}) {
@@ -2158,18 +2221,24 @@ async function checkAndSendNotifications(context) {
     // Get system rows for calculating rätt
     const [sysRows] = await db.query('SELECT * FROM TIT_systemrader WHERE drawNumber = ?', [drawNumber]);
 
+    // Tecken för ett event. Ej startad match (saknar outcomeScore) = 0-0 = X,
+    // samma antagande som live-vyn i appen använder.
+    function eventSign(event) {
+        if (!event || !event.outcomeScore) return 'X';
+        const parts = event.outcomeScore.split('-');
+        const homeGoals = parseInt(parts[0]) || 0;
+        const awayGoals = parseInt(parts[1]) || 0;
+        return homeGoals > awayGoals ? '1' : homeGoals < awayGoals ? '2' : 'X';
+    }
+
     function calcBestCorrect(sysRows, events) {
         let best = 0;
         for (const row of sysRows) {
             let correct = 0;
             for (let i = 1; i <= 13; i++) {
                 const event = events[i - 1];
-                if (!event || !event.outcomeScore) continue;
-                const parts = event.outcomeScore.split('-');
-                const homeGoals = parseInt(parts[0]) || 0;
-                const awayGoals = parseInt(parts[1]) || 0;
-                const resultSign = homeGoals > awayGoals ? '1' : homeGoals < awayGoals ? '2' : 'X';
-                if (row[`m${i}`] === resultSign) correct++;
+                if (!event) continue;
+                if (row[`m${i}`] === eventSign(event)) correct++;
             }
             if (correct > best) best = correct;
         }
@@ -2183,28 +2252,35 @@ async function checkAndSendNotifications(context) {
             let correct = 0;
             for (let i = 1; i <= 13; i++) {
                 const event = events[i - 1];
-                if (!event || !event.outcomeScore) continue;
-                const parts = event.outcomeScore.split('-');
-                const homeGoals = parseInt(parts[0]) || 0;
-                const awayGoals = parseInt(parts[1]) || 0;
-                const resultSign = homeGoals > awayGoals ? '1' : homeGoals < awayGoals ? '2' : 'X';
-                if (row[`m${i}`] === resultSign) correct++;
+                if (!event) continue;
+                if (row[`m${i}`] === eventSign(event)) correct++;
             }
             rightCount[correct] = (rightCount[correct] || 0) + 1;
         }
+        // När en match är oavgjord publicerar Svenska Spel tre varianter per
+        // vinstgrupp (tecken 1/X/2 för den kvarvarande matchen). Välj den variant
+        // som matchar matchens aktuella resultat i stället för att summera alla tre.
         let total = 0;
-        for (const dist of distribution) {
-            if (!dist || !dist.name) continue;
-            const match = dist.name.match(/(\d+)/);
-            if (!match) continue;
-            const numRight = parseInt(match[1]);
-            if (numRight < 10) continue;
+        for (const numRight of [13, 12, 11, 10]) {
             const count = rightCount[numRight] || 0;
-            if (count > 0) {
-                const amountStr = typeof dist.amount === 'string' ? dist.amount : String(dist.amount || 0);
-                const amount = parseFloat(amountStr.replace(',', '.')) || 0;
-                total += count * amount;
+            if (count <= 0) continue;
+            const entries = distribution.filter(d => {
+                if (!d || !d.name) return false;
+                const m = d.name.match(/(\d+)/);
+                return m && parseInt(m[1]) === numRight;
+            });
+            if (!entries.length) continue;
+            let entry = entries[0];
+            if (entries.length > 1 && entries[0].eventNumber) {
+                const evNr = parseInt(entries[0].eventNumber);
+                const ev = events[evNr - 1] || events.find(e => e.eventNumber === evNr);
+                const sign = eventSign(ev);
+                const matched = entries.find(e => e.sign === sign);
+                if (matched) entry = matched;
             }
+            const amountStr = typeof entry.amount === 'string' ? entry.amount : String(entry.amount || 0);
+            const amount = parseFloat(amountStr.replace(',', '.')) || 0;
+            total += count * amount;
         }
         return Math.round(total);
     }
@@ -2408,6 +2484,12 @@ app.http('api', {
                     return await getPushSettings(params);
                 case 'updatePushSettings':
                     return await updatePushSettings(params);
+                case 'saveAdminMessage':
+                    return await saveAdminMessage(params);
+                case 'sendMessagePush':
+                    return await sendMessagePush(params);
+                case 'sendPushOnly':
+                    return await sendPushOnly(params);
                 case 'analyzeMatch': {
                     if (!GEMINI_API_KEY) return jsonResponse({ error: 'AI not configured' }, 503);
                     const hemmalag = params.hemmalag;
@@ -2619,12 +2701,14 @@ async function getAdminData(params) {
     if (userId !== 1) return jsonResponse({ error: 'Ej behörig' }, 403);
 
     const db = getPool();
+    await ensureMessageSchema(db);
     const [ekoRows] = await db.query('SELECT spelomgang, isSlutspel FROM TIT_ekonomi ORDER BY spelomgang DESC LIMIT 1');
     const spelomgang = ekoRows.length ? ekoRows[0].spelomgang : '';
 
-    // Get speletOppet status
-    const [adminRows] = await db.query('SELECT speletOppet FROM TIT_admin LIMIT 1');
+    // Get speletOppet status + admin message
+    const [adminRows] = await db.query('SELECT speletOppet, message FROM TIT_admin LIMIT 1');
     const speletOppetVal = adminRows.length ? adminRows[0].speletOppet : 0;
+    const adminMessage = adminRows.length ? (adminRows[0].message || '') : '';
 
     // Get matches with kupong info, lottning (who's responsible), and tipsrad
     const [matches] = await db.query(`
@@ -2666,6 +2750,7 @@ async function getAdminData(params) {
         spelomgang,
         speletOppet: speletOppetVal,
         isSlutspel: ekoRows.length ? ekoRows[0].isSlutspel : 0,
+        message: adminMessage,
         matches: result
     });
 }
