@@ -265,6 +265,16 @@ async function getDashboard(query) {
         systemInfo = { hel, halv, rader: antalRader, garanti };
     }
 
+    // Har veckans systemrad publicerats? (finns rader i TIT_systemrader)
+    let radPublicerad = false;
+    if (current.drawNumber) {
+        const [pubCount] = await db.query(
+            'SELECT COUNT(*) as cnt FROM TIT_systemrader WHERE drawNumber = ?',
+            [current.drawNumber]
+        );
+        radPublicerad = pubCount[0].cnt > 0;
+    }
+
     // Live status check
     let liveState = 'waiting'; // 'waiting' | 'live' | 'finished'
     if (current.drawNumber) {
@@ -308,6 +318,7 @@ async function getDashboard(query) {
         tipsrad: tipsradRows,
         liveState,
         systemInfo,
+        radPublicerad,
         message: adminMessage,
     });
 }

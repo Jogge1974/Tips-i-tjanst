@@ -26,6 +26,7 @@ interface DashboardData {
   hasTipped: boolean;
   hasGardering: boolean;
   liveState: 'waiting' | 'live' | 'finished';
+  radPublicerad?: boolean;
   message?: string;
 }
 
@@ -242,8 +243,17 @@ export default function HomeScreen() {
           <Ionicons name="football-outline" size={28} color="#1B5E20" />
         </View>
         <View style={styles.bannerContent}>
-          <Text style={styles.bannerTitleDark}>Veckans rad är publicerad</Text>
-          <Text style={styles.bannerSubDark}>Omgång {status.spelomgang} – Se kupongen</Text>
+          {data.radPublicerad ? (
+            <>
+              <Text style={styles.bannerTitleDark}>Veckans rad är publicerad</Text>
+              <Text style={styles.bannerSubDark}>Omgång {status.spelomgang} – Se kupongen</Text>
+            </>
+          ) : (
+            <>
+              <Text style={styles.bannerTitleDark}>Spelet är stängt</Text>
+              <Text style={styles.bannerSubDark}>Nästa omgång öppnar snart</Text>
+            </>
+          )}
         </View>
         <Ionicons name="chevron-forward" size={24} color="#1B5E20" />
       </TouchableOpacity>
