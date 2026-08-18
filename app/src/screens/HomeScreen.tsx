@@ -271,53 +271,37 @@ export default function HomeScreen() {
   const renderSlutspelCard = () => {
     if (status.isSlutspel !== 1 || !slutspel || !slutspel.kvart) return null;
 
-    const phaseMeta: { key: 'kvart' | 'semi' | 'final'; title: string; advanceLabel: string }[] = [
-      { key: 'kvart', title: 'Kvartsfinal', advanceLabel: 'Till semifinal' },
-      { key: 'semi', title: 'Semifinal', advanceLabel: 'Till final' },
-      { key: 'final', title: 'Final', advanceLabel: 'Vinnare' },
-    ];
     const phaseLabels: Record<string, string> = { kvart: 'Kvartsfinal', semi: 'Semifinal', final: 'Final', done: 'Avgjort' };
+    const lastName = (namn: string) => (namn || '').trim().split(/\s+/).pop() || namn;
 
-    const renderPhase = (meta: { key: 'kvart' | 'semi' | 'final'; title: string; advanceLabel: string }) => {
-      const phase = slutspel[meta.key];
-      const isActive = slutspel.currentPhase === meta.key;
-      return (
-        <View key={meta.key} style={styles.spPhase}>
-          <View style={styles.spPhaseHeaderRow}>
-            <Text style={styles.spPhaseTitle}>{meta.title}</Text>
-            {isActive && (
-              <View style={styles.spActiveBadge}>
-                <Text style={styles.spActiveBadgeText}>{phase && phase.played ? 'KLAR' : 'PÅGÅR'}</Text>
-              </View>
-            )}
+    // Fasta längder så trädet behåller formen även innan resultat finns
+    const pad = (entries: any[] | undefined, n: number) => {
+      const arr = entries ? entries.slice(0, n) : [];
+      while (arr.length < n) arr.push(null);
+      return arr;
+    };
+    const cols: { key: 'kvart' | 'semi' | 'final'; title: string; data: any[]; played: boolean }[] = [
+      { key: 'kvart', title: 'Kvart', data: pad(slutspel.kvart?.entries, 8), played: !!slutspel.kvart?.played },
+      { key: 'semi', title: 'Semi', data: pad(slutspel.semi?.entries, 4), played: !!slutspel.semi?.played },
+      { key: 'final', title: 'Final', data: pad(slutspel.final?.entries, 2), played: !!slutspel.final?.played },
+    ];
+
+    const renderChip = (e: any, played: boolean) => {
+      if (!e) {
+        return (
+          <View style={[styles.spTreeChip, styles.spTreeChipEmpty]}>
+            <Text style={styles.spTreeEmptyText}>–</Text>
           </View>
-          {phase && phase.entries.length > 0 ? (
-            phase.entries.map((e, i) => {
-              const isMe = e.id === user?.id;
-              const isWinner = meta.key === 'final' && phase.played && e.advances;
-              return (
-                <View
-                  key={`${e.id}-${i}`}
-                  style={[
-                    styles.spRow,
-                    e.advances && styles.spRowAdvance,
-                    isWinner && styles.spRowWinner,
-                  ]}
-                >
-                  <Text style={[styles.spPos, e.advances && styles.spPosAdvance]}>{i + 1}</Text>
-                  <Text style={[styles.spName, isMe && styles.spNameMe]} numberOfLines={1}>
-                    {isWinner ? '🏆 ' : ''}{e.namn}{isMe ? ' (du)' : ''}
-                  </Text>
-                  {phase.played ? (
-                    <Text style={styles.spResult}>{e.resultat}</Text>
-                  ) : (
-                    <Text style={styles.spPending}>–</Text>
-                  )}
-                </View>
-              );
-            })
-          ) : (
-            <Text style={styles.spEmpty}>Avgörs när föregående fas är klar</Text>
+        );
+      }
+      const isMe = e.id === user?.id;
+      return (
+        <View style={[styles.spTreeChip, e.advances && styles.spTreeChipAdv, isMe && styles.spTreeChipMe]}>
+          <Text style={[styles.spTreeName, e.advances && styles.spTreeNameAdv, isMe && styles.spTreeNameMe]} numberOfLines={1}>
+            {lastName(e.namn)}
+          </Text>
+          {played && e.resultat != null && (
+            <Text style={[styles.spTreeScore, e.advances && styles.spTreeScoreAdv]}>{e.resultat}</Text>
           )}
         </View>
       );
@@ -335,13 +319,33 @@ export default function HomeScreen() {
           <View style={styles.spChampion}>
             <Text style={styles.spChampionCrown}>🏆</Text>
             <View style={{ flex: 1 }}>
-              <Text style={styles.spChampionLabel}>Mästare {slutspel.sasong ? `säsong ${slutspel.sasong}` : ''}</Text>
+              <Text style={styles.spChampionLabel}>Mästare{slutspel.sasong ? ` säsong ${slutspel.sasong}` : ''}</Text>
               <Text style={styles.spChampionName}>{slutspel.winner.namn}</Text>
             </View>
           </View>
         )}
 
-        {phaseMeta.map(renderPhase)}
+        <View style={styles.spTree}>
+          {cols.map((col, ci) => (
+            <React.Fragment key={col.key}>
+              <View style={styles.spTreeCol}>
+                <Text style={[styles.spTreeColTitle, slutspel.currentPhase === col.key && styles.spTreeColTitleActive]}>
+                  {col.title}
+                </Text>
+                <View style={styles.spTreeColBody}>
+                  {col.data.map((e, i) => (
+                    <View key={i} style={styles.spTreeCell}>{renderChip(e, col.played)}</View>
+                  ))}
+                </View>
+              </View>
+              {ci < cols.length - 1 && (
+                <View style={styles.spTreeConn}>
+                  <Ionicons name="chevron-forward" size={14} color="#BBD8C0" />
+                </View>
+              )}
+            </React.Fragment>
+          ))}
+        </View>
       </View>
     );
   };
@@ -612,58 +616,78 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   spChampionName: { fontSize: 18, fontWeight: '800', color: '#1B5E20' },
-  spPhase: { marginBottom: 14 },
-  spPhaseHeaderRow: {
+
+  // ----- Horizontal bracket tree -----
+  spTree: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 6,
+    alignItems: 'stretch',
   },
-  spPhaseTitle: {
-    fontSize: 12,
+  spTreeCol: {
+    flex: 1,
+  },
+  spTreeColTitle: {
+    fontSize: 10,
     fontWeight: '800',
-    color: '#555',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-  },
-  spActiveBadge: {
-    backgroundColor: '#1B5E20',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
-  },
-  spActiveBadgeText: { fontSize: 9, fontWeight: '800', color: '#fff', letterSpacing: 0.5 },
-  spRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 7,
-    paddingHorizontal: 8,
-    borderRadius: 8,
-    marginBottom: 3,
-    backgroundColor: '#FAFAFA',
-  },
-  spRowAdvance: {
-    backgroundColor: '#E9F5EC',
-    borderLeftWidth: 3,
-    borderLeftColor: '#1B5E20',
-  },
-  spRowWinner: {
-    backgroundColor: '#FBF3D5',
-    borderLeftColor: '#B8860B',
-  },
-  spPos: {
-    width: 22,
-    fontSize: 13,
-    fontWeight: '700',
     color: '#999',
     textAlign: 'center',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginBottom: 6,
   },
-  spPosAdvance: { color: '#1B5E20' },
-  spName: { flex: 1, fontSize: 14, color: '#333', marginLeft: 6 },
-  spNameMe: { fontWeight: '800', color: '#1B5E20' },
-  spResult: { fontSize: 14, fontWeight: '800', color: '#1B5E20', minWidth: 28, textAlign: 'right' },
-  spPending: { fontSize: 14, color: '#BBB', minWidth: 28, textAlign: 'right' },
-  spEmpty: { fontSize: 13, color: '#999', fontStyle: 'italic', paddingVertical: 6, paddingHorizontal: 8 },
+  spTreeColTitleActive: { color: '#1B5E20' },
+  spTreeColBody: {
+    flex: 1,
+    justifyContent: 'space-around',
+  },
+  spTreeCell: {
+    justifyContent: 'center',
+    paddingVertical: 2,
+  },
+  spTreeChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FAFAFA',
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: '#EEE',
+    paddingVertical: 5,
+    paddingHorizontal: 5,
+  },
+  spTreeChipAdv: {
+    backgroundColor: '#E9F5EC',
+    borderColor: '#1B5E20',
+  },
+  spTreeChipMe: {
+    borderColor: '#B8860B',
+    borderWidth: 1.5,
+  },
+  spTreeChipEmpty: {
+    backgroundColor: 'transparent',
+    borderStyle: 'dashed',
+    borderColor: '#DDD',
+  },
+  spTreeName: {
+    flexShrink: 1,
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#444',
+  },
+  spTreeNameAdv: { color: '#1B5E20', fontWeight: '700' },
+  spTreeNameMe: { color: '#1B5E20', fontWeight: '800' },
+  spTreeScore: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#999',
+    marginLeft: 4,
+  },
+  spTreeScoreAdv: { color: '#1B5E20' },
+  spTreeEmptyText: { fontSize: 11, color: '#CCC' },
+  spTreeConn: {
+    width: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
 
   // Grid
   grid: { flexDirection: 'row', gap: 12, marginBottom: 12 },
