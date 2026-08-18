@@ -10,6 +10,7 @@ export default function SettingsScreen() {
     notis_ny_kupong: 1,
     notis_spelstopp: 1,
     notis_live: 1,
+    notis_meddelande: 1,
   });
 
   useFocusEffect(
@@ -93,6 +94,19 @@ export default function SettingsScreen() {
             onValueChange={() => toggleSetting('notis_live')}
             trackColor={{ false: '#ddd', true: '#81C784' }}
             thumbColor={settings.notis_live ? '#1B5E20' : '#999'}
+          />
+        </View>
+
+        <View style={styles.settingRow}>
+          <View style={styles.settingInfo}>
+            <Text style={styles.settingLabel}>Meddelande-notiser</Text>
+            <Text style={styles.settingDesc}>Notis när ett nytt meddelande finns</Text>
+          </View>
+          <Switch
+            value={!!settings.notis_meddelande}
+            onValueChange={() => toggleSetting('notis_meddelande')}
+            trackColor={{ false: '#ddd', true: '#81C784' }}
+            thumbColor={settings.notis_meddelande ? '#1B5E20' : '#999'}
           />
         </View>
       </View>

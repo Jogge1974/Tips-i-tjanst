@@ -47,6 +47,7 @@ interface AdminData {
   spelomgang: string;
   speletOppet: number;
   isSlutspel: number;
+  message: string;
   matches: AdminMatch[];
 }
 
@@ -89,6 +90,15 @@ export default function AdminScreen() {
   const [ekoLoading, setEkoLoading] = useState(false);
   const [ekoSaving, setEkoSaving] = useState(false);
 
+  // Message state
+  const [message, setMessage] = useState('');
+  const [msgSaving, setMsgSaving] = useState(false);
+  const [msgPushing, setMsgPushing] = useState(false);
+
+  // Push-only (one-off) message state
+  const [pushOnlyMessage, setPushOnlyMessage] = useState('');
+  const [pushOnlySending, setPushOnlySending] = useState(false);
+
   const loadEkonomi = useCallback(async () => {
     if (!user || user.id !== 1) return;
     setEkoLoading(true);
@@ -114,6 +124,7 @@ export default function AdminScreen() {
       setData(json);
       setSpeletOppet(json.speletOppet === 1);
       setMatches(json.matches || []);
+      setMessage(json.message || '');
       setHasChanges(false);
     } catch (err: any) {
       Alert.alert('Fel', err.message);
@@ -253,6 +264,107 @@ export default function AdminScreen() {
       Alert.alert('Fel', err.message);
     }
     setPushLoading(false);
+  };
+
+  const handleSaveMessage = async () => {
+    if (!user) return;
+    setMsgSaving(true);
+    try {
+      const resp = await fetch(`${API_BASE_URL}?action=saveAdminMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: user.id, message }),
+      });
+      const json = await resp.json();
+      if (json.success) {
+        Alert.alert('Sparat', message.trim() ? 'Meddelandet visas nu på Hem-vyn.' : 'Meddelandet tömt – rutan döljs.');
+      } else {
+        Alert.alert('Fel', json.error || 'Kunde inte spara meddelandet');
+      }
+    } catch (err: any) {
+      Alert.alert('Fel', err.message);
+    }
+    setMsgSaving(false);
+  };
+
+  const handleSendMessagePush = () => {
+    if (!user) return;
+    if (!message.trim()) {
+      Alert.alert('Tomt meddelande', 'Skriv och spara ett meddelande innan du pushar.');
+      return;
+    }
+    Alert.alert(
+      'Skicka push',
+      'Vill du skicka meddelandet som push-notis till alla användare som har meddelande-notiser på?',
+      [
+        { text: 'Avbryt', style: 'cancel' },
+        {
+          text: 'Skicka',
+          onPress: async () => {
+            setMsgPushing(true);
+            try {
+              // Save first so the pushed text matches what's shown
+              await fetch(`${API_BASE_URL}?action=saveAdminMessage`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId: user.id, message }),
+              });
+              const resp = await fetch(`${API_BASE_URL}?action=sendMessagePush`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId: user.id }),
+              });
+              const json = await resp.json();
+              if (json.success) {
+                Alert.alert('Skickat', `Push skickad till ${json.sent} mottagare.`);
+              } else {
+                Alert.alert('Fel', json.error || 'Kunde inte skicka push');
+              }
+            } catch (err: any) {
+              Alert.alert('Fel', err.message);
+            }
+            setMsgPushing(false);
+          },
+        },
+      ]
+    );
+  };
+
+  const handleSendPushOnly = () => {
+    if (!user) return;
+    if (!pushOnlyMessage.trim()) {
+      Alert.alert('Tomt meddelande', 'Skriv ett meddelande innan du skickar.');
+      return;
+    }
+    Alert.alert(
+      'Skicka push-notis',
+      'Vill du skicka detta som en push-notis till alla användare som har meddelande-notiser på? Meddelandet sparas inte och visas inte på Hem-vyn.',
+      [
+        { text: 'Avbryt', style: 'cancel' },
+        {
+          text: 'Skicka',
+          onPress: async () => {
+            setPushOnlySending(true);
+            try {
+              const resp = await fetch(`${API_BASE_URL}?action=sendPushOnly`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId: user.id, message: pushOnlyMessage }),
+              });
+              const json = await resp.json();
+              if (json.success) {
+                Alert.alert('Skickat', `Push skickad till ${json.sent} mottagare.`);
+              } else {
+                Alert.alert('Fel', json.error || 'Kunde inte skicka push');
+              }
+            } catch (err: any) {
+              Alert.alert('Fel', err.message);
+            }
+            setPushOnlySending(false);
+          },
+        },
+      ]
+    );
   };
 
   const toggleSpeletOppet = async (value: boolean) => {
@@ -842,6 +954,80 @@ export default function AdminScreen() {
         )}
       </View>
 
+      {/* ===== MEDDELANDE SECTION ===== */}
+      <View style={styles.msgSection}>
+        <Text style={styles.msgTitle}>📢 Meddelande på Hem-vyn</Text>
+        <Text style={styles.msgSubtitle}>Sparas och visas på Hem-vyn. Kan även pushas.</Text>
+        <TextInput
+          style={styles.msgInput}
+          value={message}
+          onChangeText={setMessage}
+          placeholder="Skriv ett meddelande till app-användarna…"
+          placeholderTextColor="#999"
+          multiline
+          textAlignVertical="top"
+        />
+        <View style={styles.msgBtnRow}>
+          <TouchableOpacity
+            style={[styles.msgBtn, styles.msgBtnSave]}
+            disabled={msgSaving}
+            onPress={handleSaveMessage}
+          >
+            {msgSaving ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.msgBtnText}>Spara meddelande</Text>
+            )}
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.msgBtn, styles.msgBtnPush]}
+            disabled={msgPushing}
+            onPress={handleSendMessagePush}
+          >
+            {msgPushing ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.msgBtnText}>Skicka som push</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* ===== SNABB-PUSH SECTION ===== */}
+      <View style={styles.msgSection}>
+        <Text style={styles.msgTitle}>⚡ Snabb-push</Text>
+        <Text style={styles.msgSubtitle}>Skickas som push-notis direkt – sparas inte och visas inte på Hem-vyn.</Text>
+        <TextInput
+          style={styles.msgInput}
+          value={pushOnlyMessage}
+          onChangeText={setPushOnlyMessage}
+          placeholder="Skriv ett meddelande som bara skickas som push…"
+          placeholderTextColor="#999"
+          multiline
+          textAlignVertical="top"
+        />
+        <View style={styles.msgBtnRow}>
+          <TouchableOpacity
+            style={[styles.msgBtn, styles.msgBtnClear]}
+            disabled={pushOnlySending || !pushOnlyMessage.trim()}
+            onPress={() => setPushOnlyMessage('')}
+          >
+            <Text style={styles.msgBtnText}>Rensa</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.msgBtn, styles.msgBtnPush]}
+            disabled={pushOnlySending}
+            onPress={handleSendPushOnly}
+          >
+            {pushOnlySending ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.msgBtnText}>Skicka push-notis</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      </View>
+
       {/* Analysis Modal */}
       <Modal visible={analysisModal.visible} transparent animationType="slide">
         <View style={styles.modalOverlay}>
@@ -1117,4 +1303,24 @@ const styles = StyleSheet.create({
     backgroundColor: '#6A1B9A',
   },
   avslutaBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+
+  // Message styles
+  msgSection: {
+    backgroundColor: '#fff', borderRadius: 12, marginHorizontal: 16, marginTop: 24,
+    padding: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08, shadowRadius: 6, elevation: 3,
+  },
+  msgTitle: { fontSize: 18, fontWeight: '800', color: '#E65100', textAlign: 'center' },
+  msgSubtitle: { fontSize: 13, color: '#666', textAlign: 'center', marginBottom: 16 },
+  msgInput: {
+    fontSize: 15, color: '#333', backgroundColor: '#FFF8E1', borderRadius: 8,
+    paddingHorizontal: 12, paddingVertical: 10, minHeight: 90,
+    borderWidth: 1, borderColor: '#FFE0B2',
+  },
+  msgBtnRow: { flexDirection: 'row', gap: 12, marginTop: 16 },
+  msgBtn: { flex: 1, borderRadius: 10, padding: 14, alignItems: 'center' },
+  msgBtnSave: { backgroundColor: '#1565C0' },
+  msgBtnPush: { backgroundColor: '#E65100' },
+  msgBtnClear: { backgroundColor: '#9E9E9E' },
+  msgBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
 });

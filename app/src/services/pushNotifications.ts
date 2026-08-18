@@ -72,6 +72,7 @@ export interface PushSettings {
   notis_ny_kupong: number;
   notis_spelstopp: number;
   notis_live: number;
+  notis_meddelande: number;
 }
 
 export async function getPushSettings(userId: number): Promise<PushSettings> {
@@ -79,7 +80,7 @@ export async function getPushSettings(userId: number): Promise<PushSettings> {
     const response = await fetch(`${API_BASE_URL}?action=getPushSettings&userId=${userId}`);
     return await response.json();
   } catch {
-    return { notis_ny_kupong: 1, notis_spelstopp: 1, notis_live: 1 };
+    return { notis_ny_kupong: 1, notis_spelstopp: 1, notis_live: 1, notis_meddelande: 1 };
   }
 }
 
