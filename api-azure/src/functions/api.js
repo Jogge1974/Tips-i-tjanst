@@ -1903,6 +1903,91 @@ async function getTipsAllsvenskan(query) {
     return jsonResponse({ standings, myPosition, sasong });
 }
 
+// GET SLUTSPEL - playoff bracket (kvartsfinal -> semifinal -> final) for current season
+async function getSlutspel() {
+    const db = getPool();
+
+    // Current season = latest TipsAllsvenskan season
+    const [maxRows] = await db.query('SELECT MAX(sasong) as s FROM TIT_TipsAllsvenskan');
+    if (!maxRows.length || !maxRows[0].s) {
+        return jsonResponse({ sasong: null });
+    }
+    const sasong = maxRows[0].s;
+
+    // All finished-phase results for the season (populated only after a phase is played)
+    const [rows] = await db.query(
+        'SELECT typ, id, namn, sortpoang, resultat FROM TIT_newSlutspel WHERE sasong = ?',
+        [sasong]
+    );
+    const byTyp = { 0: [], 1: [], 2: [] };
+    for (const r of rows) {
+        if (byTyp[r.typ]) byTyp[r.typ].push(r);
+    }
+
+    // resultat DESC, then sortpoang ASC (tiebreak)
+    const rank = (arr) => [...arr].sort((a, b) => {
+        if (b.resultat !== a.resultat) return b.resultat - a.resultat;
+        return (a.sortpoang ?? 0) - (b.sortpoang ?? 0);
+    });
+
+    const played = (arr, advanceCount) => ({
+        played: true,
+        entries: rank(arr).map((r, i) => ({
+            id: r.id, namn: r.namn, resultat: r.resultat,
+            sortpoang: r.sortpoang, advances: i < advanceCount,
+        })),
+    });
+    const upcoming = (entries) => ({
+        played: false,
+        entries: entries.map(e => ({ id: e.id, namn: e.namn, resultat: null, sortpoang: null, advances: false })),
+    });
+
+    // Kvartsfinal (typ 0): played -> use results; else the 8 qualifiers from TipsAllsvenskan
+    let kvart;
+    if (byTyp[0].length > 0) {
+        kvart = played(byTyp[0], 4);
+    } else {
+        const [standings] = await db.query(
+            `SELECT a.id, a.poang, CONCAT(u.fornamn, ' ', u.efternamn) as namn
+             FROM TIT_TipsAllsvenskan a JOIN TIT_TipsTjanst u ON u.id = a.id
+             WHERE a.sasong = ? ORDER BY a.poang DESC LIMIT 8`,
+            [sasong]
+        );
+        kvart = { played: false, entries: standings.map(s => ({ id: s.id, namn: s.namn, resultat: null, sortpoang: null, advances: false, poang: s.poang })) };
+    }
+
+    // Semifinal (typ 1): played -> use results; else the top 4 kvartsfinalists (if kvart played)
+    let semi;
+    if (byTyp[1].length > 0) {
+        semi = played(byTyp[1], 2);
+    } else if (byTyp[0].length > 0) {
+        semi = upcoming(rank(byTyp[0]).slice(0, 4));
+    } else {
+        semi = { played: false, entries: [] };
+    }
+
+    // Final (typ 2): played -> use results; else the top 2 semifinalists (if semi played)
+    let final;
+    if (byTyp[2].length > 0) {
+        final = played(byTyp[2], 1);
+    } else if (byTyp[1].length > 0) {
+        final = upcoming(rank(byTyp[1]).slice(0, 2));
+    } else {
+        final = { played: false, entries: [] };
+    }
+
+    const winner = final.played && final.entries.length
+        ? { id: final.entries[0].id, namn: final.entries[0].namn }
+        : null;
+
+    let currentPhase = 'kvart';
+    if (byTyp[2].length > 0) currentPhase = 'done';
+    else if (byTyp[1].length > 0) currentPhase = 'final';
+    else if (byTyp[0].length > 0) currentPhase = 'semi';
+
+    return jsonResponse({ sasong, currentPhase, kvart, semi, final, winner });
+}
+
 // ===== PUSH NOTIFICATIONS =====
 
 async function registerPushToken(params) {
@@ -2531,6 +2616,8 @@ app.http('api', {
                 }
                 case 'getTipsAllsvenskan':
                     return await getTipsAllsvenskan(params);
+                case 'getSlutspel':
+                    return await getSlutspel();
                 case 'getRoundHistory':
                     return await getRoundHistory();
                 case 'getUserKupong':

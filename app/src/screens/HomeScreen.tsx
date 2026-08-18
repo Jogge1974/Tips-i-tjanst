@@ -12,7 +12,7 @@ import {
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
-import { api } from '../services/api';
+import { api, SlutspelData } from '../services/api';
 
 interface DashboardData {
   status: { speletOppet: number; spelomgang: string; isSlutspel: number; antalRatt: number };
@@ -71,6 +71,7 @@ export default function HomeScreen() {
   const { user } = useAuth();
   const navigation = useNavigation<any>();
   const [data, setData] = useState<DashboardData | null>(null);
+  const [slutspel, setSlutspel] = useState<SlutspelData | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -79,6 +80,13 @@ export default function HomeScreen() {
     try {
       const dashboard = await api.getDashboard(user.id);
       setData(dashboard);
+      if (dashboard?.status?.isSlutspel === 1) {
+        try {
+          setSlutspel(await api.getSlutspel());
+        } catch { /* ignore slutspel fetch errors */ }
+      } else {
+        setSlutspel(null);
+      }
     } catch (e) {
       console.error('Dashboard fetch error:', e);
     } finally {
@@ -260,6 +268,84 @@ export default function HomeScreen() {
     );
   };
 
+  const renderSlutspelCard = () => {
+    if (status.isSlutspel !== 1 || !slutspel || !slutspel.kvart) return null;
+
+    const phaseMeta: { key: 'kvart' | 'semi' | 'final'; title: string; advanceLabel: string }[] = [
+      { key: 'kvart', title: 'Kvartsfinal', advanceLabel: 'Till semifinal' },
+      { key: 'semi', title: 'Semifinal', advanceLabel: 'Till final' },
+      { key: 'final', title: 'Final', advanceLabel: 'Vinnare' },
+    ];
+    const phaseLabels: Record<string, string> = { kvart: 'Kvartsfinal', semi: 'Semifinal', final: 'Final', done: 'Avgjort' };
+
+    const renderPhase = (meta: { key: 'kvart' | 'semi' | 'final'; title: string; advanceLabel: string }) => {
+      const phase = slutspel[meta.key];
+      const isActive = slutspel.currentPhase === meta.key;
+      return (
+        <View key={meta.key} style={styles.spPhase}>
+          <View style={styles.spPhaseHeaderRow}>
+            <Text style={styles.spPhaseTitle}>{meta.title}</Text>
+            {isActive && (
+              <View style={styles.spActiveBadge}>
+                <Text style={styles.spActiveBadgeText}>{phase && phase.played ? 'KLAR' : 'PÅGÅR'}</Text>
+              </View>
+            )}
+          </View>
+          {phase && phase.entries.length > 0 ? (
+            phase.entries.map((e, i) => {
+              const isMe = e.id === user?.id;
+              const isWinner = meta.key === 'final' && phase.played && e.advances;
+              return (
+                <View
+                  key={`${e.id}-${i}`}
+                  style={[
+                    styles.spRow,
+                    e.advances && styles.spRowAdvance,
+                    isWinner && styles.spRowWinner,
+                  ]}
+                >
+                  <Text style={[styles.spPos, e.advances && styles.spPosAdvance]}>{i + 1}</Text>
+                  <Text style={[styles.spName, isMe && styles.spNameMe]} numberOfLines={1}>
+                    {isWinner ? '🏆 ' : ''}{e.namn}{isMe ? ' (du)' : ''}
+                  </Text>
+                  {phase.played ? (
+                    <Text style={styles.spResult}>{e.resultat}</Text>
+                  ) : (
+                    <Text style={styles.spPending}>–</Text>
+                  )}
+                </View>
+              );
+            })
+          ) : (
+            <Text style={styles.spEmpty}>Avgörs när föregående fas är klar</Text>
+          )}
+        </View>
+      );
+    };
+
+    return (
+      <View style={styles.spCard}>
+        <View style={styles.spHeader}>
+          <Ionicons name="trophy" size={18} color="#B8860B" />
+          <Text style={styles.spTitle}>Slutspel</Text>
+          <Text style={styles.spPhaseBadge}>{phaseLabels[slutspel.currentPhase || 'kvart']}</Text>
+        </View>
+
+        {slutspel.winner && (
+          <View style={styles.spChampion}>
+            <Text style={styles.spChampionCrown}>🏆</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.spChampionLabel}>Mästare {slutspel.sasong ? `säsong ${slutspel.sasong}` : ''}</Text>
+              <Text style={styles.spChampionName}>{slutspel.winner.namn}</Text>
+            </View>
+          </View>
+        )}
+
+        {phaseMeta.map(renderPhase)}
+      </View>
+    );
+  };
+
   return (
     <ScrollView
       style={styles.container}
@@ -288,6 +374,9 @@ export default function HomeScreen() {
           <Text style={styles.messageText}>{adminMessage}</Text>
         </View>
       )}
+
+      {/* Slutspel bracket (endast slutspelsomgångar) */}
+      {renderSlutspelCard()}
 
       {/* Last result card - split view */}
       {lastResult && (() => {
@@ -464,6 +553,117 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   messageText: { fontSize: 15, lineHeight: 22, color: '#333' },
+
+  // ===== Slutspel bracket card =====
+  spCard: {
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#F0E3C0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  spHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  spTitle: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#1B5E20',
+    letterSpacing: 0.5,
+  },
+  spPhaseBadge: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#8A6D00',
+    backgroundColor: '#FBF3D5',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    overflow: 'hidden',
+    textTransform: 'uppercase',
+  },
+  spChampion: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#FBF3D5',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#E9D28C',
+  },
+  spChampionCrown: { fontSize: 30 },
+  spChampionLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#8A6D00',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  spChampionName: { fontSize: 18, fontWeight: '800', color: '#1B5E20' },
+  spPhase: { marginBottom: 14 },
+  spPhaseHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 6,
+  },
+  spPhaseTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#555',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  spActiveBadge: {
+    backgroundColor: '#1B5E20',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  spActiveBadgeText: { fontSize: 9, fontWeight: '800', color: '#fff', letterSpacing: 0.5 },
+  spRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 7,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    marginBottom: 3,
+    backgroundColor: '#FAFAFA',
+  },
+  spRowAdvance: {
+    backgroundColor: '#E9F5EC',
+    borderLeftWidth: 3,
+    borderLeftColor: '#1B5E20',
+  },
+  spRowWinner: {
+    backgroundColor: '#FBF3D5',
+    borderLeftColor: '#B8860B',
+  },
+  spPos: {
+    width: 22,
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#999',
+    textAlign: 'center',
+  },
+  spPosAdvance: { color: '#1B5E20' },
+  spName: { flex: 1, fontSize: 14, color: '#333', marginLeft: 6 },
+  spNameMe: { fontWeight: '800', color: '#1B5E20' },
+  spResult: { fontSize: 14, fontWeight: '800', color: '#1B5E20', minWidth: 28, textAlign: 'right' },
+  spPending: { fontSize: 14, color: '#BBB', minWidth: 28, textAlign: 'right' },
+  spEmpty: { fontSize: 13, color: '#999', fontStyle: 'italic', paddingVertical: 6, paddingHorizontal: 8 },
 
   // Grid
   grid: { flexDirection: 'row', gap: 12, marginBottom: 12 },

@@ -44,6 +44,29 @@ export interface Gardering {
   tecken: string;
 }
 
+export interface SlutspelEntry {
+  id: number | null;
+  namn: string;
+  resultat: number | null;
+  sortpoang: number | null;
+  advances: boolean;
+  poang?: number;
+}
+
+export interface SlutspelPhase {
+  played: boolean;
+  entries: SlutspelEntry[];
+}
+
+export interface SlutspelData {
+  sasong: number | null;
+  currentPhase?: 'kvart' | 'semi' | 'final' | 'done';
+  kvart?: SlutspelPhase;
+  semi?: SlutspelPhase;
+  final?: SlutspelPhase;
+  winner?: { id: number | null; namn: string } | null;
+}
+
 export const api = {
   async getUsers(): Promise<User[]> {
     const response = await fetch(`${API_BASE_URL}?action=getUsers`);
@@ -146,6 +169,12 @@ export const api = {
   async getDashboard(userId: number): Promise<any> {
     const response = await fetch(`${API_BASE_URL}?action=getDashboard&userId=${userId}`);
     if (!response.ok) throw new Error('Kunde inte hämta dashboard');
+    return response.json();
+  },
+
+  async getSlutspel(): Promise<SlutspelData> {
+    const response = await fetch(`${API_BASE_URL}?action=getSlutspel`);
+    if (!response.ok) throw new Error('Kunde inte hämta slutspel');
     return response.json();
   },
 
