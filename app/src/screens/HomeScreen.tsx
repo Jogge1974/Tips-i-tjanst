@@ -286,7 +286,7 @@ export default function HomeScreen() {
       { key: 'final', title: 'Final', data: pad(slutspel.final?.entries, 2), played: !!slutspel.final?.played },
     ];
 
-    const renderChip = (e: any, played: boolean) => {
+    const renderChip = (e: any, played: boolean, isWinner: boolean) => {
       if (!e) {
         return (
           <View style={[styles.spTreeChip, styles.spTreeChipEmpty]}>
@@ -296,16 +296,32 @@ export default function HomeScreen() {
       }
       const isMe = e.id === user?.id;
       return (
-        <View style={[styles.spTreeChip, e.advances && styles.spTreeChipAdv, isMe && styles.spTreeChipMe]}>
-          <Text style={[styles.spTreeName, e.advances && styles.spTreeNameAdv, isMe && styles.spTreeNameMe]} numberOfLines={1}>
+        <View style={[
+          styles.spTreeChip,
+          e.advances && styles.spTreeChipAdv,
+          isWinner && styles.spTreeChipWinner,
+          isMe && styles.spTreeChipMe,
+        ]}>
+          {isWinner && <Text style={styles.spTreeCrown}>🏆</Text>}
+          <Text
+            style={[
+              styles.spTreeName,
+              e.advances && styles.spTreeNameAdv,
+              isWinner && styles.spTreeNameWinner,
+              isMe && styles.spTreeNameMe,
+            ]}
+            numberOfLines={1}
+          >
             {lastName(e.namn)}
           </Text>
           {played && e.resultat != null && (
-            <Text style={[styles.spTreeScore, e.advances && styles.spTreeScoreAdv]}>{e.resultat}</Text>
+            <Text style={[styles.spTreeScore, e.advances && styles.spTreeScoreAdv, isWinner && styles.spTreeScoreWinner]}>{e.resultat}</Text>
           )}
         </View>
       );
     };
+
+    const bodyStyle = { kvart: styles.spTreeBodyKvart, semi: styles.spTreeBodySemi, final: styles.spTreeBodyFinal };
 
     return (
       <View style={styles.spCard}>
@@ -332,15 +348,17 @@ export default function HomeScreen() {
                 <Text style={[styles.spTreeColTitle, slutspel.currentPhase === col.key && styles.spTreeColTitleActive]}>
                   {col.title}
                 </Text>
-                <View style={styles.spTreeColBody}>
+                <View style={[styles.spTreeColBody, bodyStyle[col.key]]}>
                   {col.data.map((e, i) => (
-                    <View key={i} style={styles.spTreeCell}>{renderChip(e, col.played)}</View>
+                    <View key={i} style={styles.spTreeCell}>
+                      {renderChip(e, col.played, col.key === 'final' && col.played && !!e?.advances)}
+                    </View>
                   ))}
                 </View>
               </View>
               {ci < cols.length - 1 && (
                 <View style={styles.spTreeConn}>
-                  <Ionicons name="chevron-forward" size={14} color="#BBD8C0" />
+                  <Ionicons name="chevron-forward" size={14} color="#C9B26A" />
                 </View>
               )}
             </React.Fragment>
@@ -560,9 +578,13 @@ const styles = StyleSheet.create({
 
   // ===== Slutspel bracket card =====
   spCard: {
-    backgroundColor: '#fff',
+    backgroundColor: '#F6FAF6',
     borderRadius: 14,
     padding: 16,
+    borderWidth: 1,
+    borderColor: '#E1EDE4',
+    borderTopWidth: 3,
+    borderTopColor: '#2E7D32',
     marginBottom: 16,
     borderWidth: 1,
     borderColor: '#F0E3C0',
@@ -577,6 +599,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     marginBottom: 12,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E4EDE6',
   },
   spTitle: {
     flex: 1,
@@ -638,7 +663,13 @@ const styles = StyleSheet.create({
   spTreeColBody: {
     flex: 1,
     justifyContent: 'space-around',
+    borderRadius: 10,
+    paddingVertical: 5,
+    paddingHorizontal: 4,
   },
+  spTreeBodyKvart: { backgroundColor: '#EFF5F0' },
+  spTreeBodySemi: { backgroundColor: '#E5F1E9' },
+  spTreeBodyFinal: { backgroundColor: '#FBF3D5', borderWidth: 1, borderColor: '#EADFB8' },
   spTreeCell: {
     justifyContent: 'center',
     paddingVertical: 2,
@@ -647,16 +678,25 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#FAFAFA',
+    backgroundColor: '#FFFFFF',
     borderRadius: 7,
     borderWidth: 1,
-    borderColor: '#EEE',
+    borderColor: '#E6E8E2',
     paddingVertical: 5,
     paddingHorizontal: 5,
+    shadowColor: '#1B5E20',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 1.5,
+    elevation: 1,
   },
   spTreeChipAdv: {
-    backgroundColor: '#E9F5EC',
-    borderColor: '#1B5E20',
+    backgroundColor: '#DCEFE1',
+    borderColor: '#6FB187',
+  },
+  spTreeChipWinner: {
+    backgroundColor: '#F6E7A6',
+    borderColor: '#D4B75C',
   },
   spTreeChipMe: {
     borderColor: '#B8860B',
@@ -665,24 +705,29 @@ const styles = StyleSheet.create({
   spTreeChipEmpty: {
     backgroundColor: 'transparent',
     borderStyle: 'dashed',
-    borderColor: '#DDD',
+    borderColor: '#CFD8D1',
+    shadowOpacity: 0,
+    elevation: 0,
   },
+  spTreeCrown: { fontSize: 9, marginRight: 2 },
   spTreeName: {
     flexShrink: 1,
     fontSize: 11,
     fontWeight: '600',
-    color: '#444',
+    color: '#455',
   },
   spTreeNameAdv: { color: '#1B5E20', fontWeight: '700' },
+  spTreeNameWinner: { color: '#7A5C00', fontWeight: '800' },
   spTreeNameMe: { color: '#1B5E20', fontWeight: '800' },
   spTreeScore: {
     fontSize: 11,
     fontWeight: '800',
-    color: '#999',
+    color: '#9AA', 
     marginLeft: 4,
   },
   spTreeScoreAdv: { color: '#1B5E20' },
-  spTreeEmptyText: { fontSize: 11, color: '#CCC' },
+  spTreeScoreWinner: { color: '#7A5C00' },
+  spTreeEmptyText: { fontSize: 11, color: '#C4CEC7' },
   spTreeConn: {
     width: 14,
     justifyContent: 'center',
