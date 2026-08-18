@@ -216,22 +216,24 @@ async function getDashboard(query) {
         'SELECT matchNr FROM TIT_tipsrad WHERE spelomgang = ? AND ansvarigId = ? LIMIT 1',
         [spelomgang, userId]
     );
-    // In slutspel a completed submission = full enkelrad (all 13 signs)
     let hasTipped = tipsrad.length > 0;
-    if (current.isSlutspel === 1) {
-        const [enkelCount] = await db.query(
-            'SELECT COUNT(*) as cnt FROM TIT_tipsrad WHERE spelomgang = ? AND ansvarigId = ?',
-            [spelomgang, userId]
-        );
-        hasTipped = enkelCount[0].cnt >= 13;
-    }
 
     // Has user submitted garderingar?
     const [gard] = await db.query(
         'SELECT matchNr FROM TIT_garderingar WHERE omgang = ? AND id = ? LIMIT 1',
         [spelomgang, userId]
     );
-    const hasGardering = gard.length > 0;
+    let hasGardering = gard.length > 0;
+
+    // Slutspel: enkelraden lämnas som garderingar (13 tecken). "Klar" = alla 13 lämnade.
+    if (current.isSlutspel === 1) {
+        const [gardCount] = await db.query(
+            'SELECT COUNT(*) as cnt FROM TIT_garderingar WHERE omgang = ? AND id = ?',
+            [spelomgang, userId]
+        );
+        hasTipped = gardCount[0].cnt >= 13;
+        hasGardering = hasTipped;
+    }
 
     // Current tipsrad (all 13 matches with team names and signs)
     const [tipsradRows] = await db.query(
@@ -441,14 +443,19 @@ async function saveGarderingar(body) {
 
     const db = getPool();
 
-    // Check status
+    const [ekoRows] = await db.query('SELECT spelomgang, isSlutspel FROM TIT_ekonomi ORDER BY spelomgang DESC LIMIT 1');
+    const spelomgang = ekoRows.length ? ekoRows[0].spelomgang : '';
+    const isSlutspel = ekoRows.length ? ekoRows[0].isSlutspel : 0;
+
+    // Check status. Slutspel (enkelrad) kan lämnas hela veckan; garderingar bara i garderingsfasen.
     const status = await speletOppet(db);
-    if (status !== 2) {
+    if (isSlutspel === 1) {
+        if (status === 0) {
+            return jsonResponse({ error: 'Spelet är stängt' }, 403);
+        }
+    } else if (status !== 2) {
         return jsonResponse({ error: 'Spelet är inte öppet för garderingar' }, 403);
     }
-
-    const [ekoRows] = await db.query('SELECT spelomgang FROM TIT_ekonomi ORDER BY spelomgang DESC LIMIT 1');
-    const spelomgang = ekoRows.length ? ekoRows[0].spelomgang : '';
 
     // Delete existing garderingar for this user/round
     await db.query('DELETE FROM TIT_garderingar WHERE omgang = ? AND id = ?', [spelomgang, userId]);
@@ -459,67 +466,6 @@ async function saveGarderingar(body) {
         await db.query(
             'INSERT INTO TIT_garderingar (omgang, id, matchNr, tecken) VALUES (?, ?, ?, ?)',
             [spelomgang, userId, matchNr, tecken]
-        );
-    }
-
-    return jsonResponse({ success: true });
-}
-
-// GET ENKELRAD - the user's single row for a slutspel round (from TIT_tipsrad)
-async function getEnkelrad(query) {
-    const userId = query.userId;
-    if (!userId) return jsonResponse({ error: 'Saknar userId' }, 400);
-    const db = getPool();
-    const [ekoRows] = await db.query('SELECT spelomgang FROM TIT_ekonomi ORDER BY spelomgang DESC LIMIT 1');
-    const spelomgang = ekoRows.length ? ekoRows[0].spelomgang : '';
-    const [rows] = await db.query(
-        'SELECT matchNr, tecken FROM TIT_tipsrad WHERE spelomgang = ? AND ansvarigId = ? ORDER BY matchNr',
-        [spelomgang, userId]
-    );
-    return jsonResponse(rows);
-}
-
-// SAVE ENKELRAD - slutspel: user tips one sign for all 13 matches (stored in TIT_tipsrad)
-async function saveEnkelrad(body) {
-    const { userId, rad } = body;
-    if (!userId || !Array.isArray(rad)) {
-        return jsonResponse({ error: 'Saknar data' }, 400);
-    }
-
-    const db = getPool();
-
-    const [ekoRows] = await db.query('SELECT spelomgang, isSlutspel FROM TIT_ekonomi ORDER BY spelomgang DESC LIMIT 1');
-    const spelomgang = ekoRows.length ? ekoRows[0].spelomgang : '';
-    const isSlutspel = ekoRows.length ? ekoRows[0].isSlutspel : 0;
-
-    if (isSlutspel !== 1) {
-        return jsonResponse({ error: 'Enkelrad kan bara lämnas i slutspelsomgångar' }, 403);
-    }
-
-    // Open the whole week (any admin-open phase), unlike garderingar
-    const status = await speletOppet(db);
-    if (status === 0) {
-        return jsonResponse({ error: 'Spelet är stängt' }, 403);
-    }
-
-    // Validate: exactly one valid tecken for each of matches 1-13
-    const byMatch = {};
-    for (const r of rad) {
-        const mn = parseInt(r.matchNr);
-        if (mn >= 1 && mn <= 13 && ['1', 'X', '2'].includes(r.tecken)) {
-            byMatch[mn] = r.tecken;
-        }
-    }
-    if (Object.keys(byMatch).length !== 13) {
-        return jsonResponse({ error: 'Du måste tippa alla 13 matcher' }, 400);
-    }
-
-    // Replace the user's enkelrad in TIT_tipsrad
-    await db.query('DELETE FROM TIT_tipsrad WHERE spelomgang = ? AND ansvarigId = ?', [spelomgang, userId]);
-    for (let mn = 1; mn <= 13; mn++) {
-        await db.query(
-            'INSERT INTO TIT_tipsrad (spelomgang, matchNr, tecken, poangGrund, ansvarigId, slutspel) VALUES (?, ?, ?, 0, ?, 1)',
-            [spelomgang, mn, byMatch[mn], userId]
         );
     }
 
@@ -2284,13 +2230,13 @@ async function checkAndSendNotifications(context) {
                 [rem.type, spelomgang]
             );
             if (alreadySent.length) continue;
-            // Users with a push token who have NOT submitted a complete enkelrad (13 signs)
+            // Users with a push token who have NOT submitted a complete enkelrad (13 tecken)
             const [untipped] = await db.query(
                 `SELECT DISTINCT pt.userId
                  FROM TIT_push_tokens pt
                  WHERE pt.notis_spelstopp = 1
-                   AND (SELECT COUNT(*) FROM TIT_tipsrad t
-                        WHERE t.spelomgang = ? AND t.ansvarigId = pt.userId) < 13`,
+                   AND (SELECT COUNT(*) FROM TIT_garderingar g
+                        WHERE g.omgang = ? AND g.id = pt.userId) < 13`,
                 [spelomgang]
             );
             for (const row of untipped) {
@@ -2551,10 +2497,6 @@ app.http('api', {
                     return await getGarderingar(params);
                 case 'saveGarderingar':
                     return await saveGarderingar(params);
-                case 'getEnkelrad':
-                    return await getEnkelrad(params);
-                case 'saveEnkelrad':
-                    return await saveEnkelrad(params);
                 case 'getLiveDraw':
                     return await getLiveDraw();
                 case 'getLiveResult':

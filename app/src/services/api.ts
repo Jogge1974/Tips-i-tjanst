@@ -113,26 +113,6 @@ export const api = {
     return response.json();
   },
 
-  async getEnkelrad(userId: number): Promise<Gardering[]> {
-    const response = await fetch(`${API_BASE_URL}?action=getEnkelrad`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId }),
-    });
-    if (!response.ok) throw new Error('Kunde inte hämta enkelrad');
-    return response.json();
-  },
-
-  async saveEnkelrad(userId: number, rad: Gardering[]): Promise<{ success: boolean; error?: string }> {
-    const response = await fetch(`${API_BASE_URL}?action=saveEnkelrad`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, rad }),
-    });
-    if (!response.ok) throw new Error('Kunde inte spara enkelrad');
-    return response.json();
-  },
-
   async getLiveDraw(): Promise<any> {
     const response = await fetch(`${API_BASE_URL}?action=getLiveDraw`);
     if (!response.ok) throw new Error('Kunde inte hämta live-data');

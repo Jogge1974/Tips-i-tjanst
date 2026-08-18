@@ -102,14 +102,14 @@ export default function MinSidaScreen() {
 
       // Om garderingsläge, hämta kupong och befintliga garderingar
       if (statusData.isSlutspel === 1 && statusData.speletOppet !== 0) {
-        // Slutspel: enkelrad öppen hela veckan
-        const [kupongData, radData] = await Promise.all([
+        // Slutspel: enkelrad lämnas som garderingar (samma tabell), öppen hela veckan
+        const [kupongData, gardData] = await Promise.all([
           api.getKupong(),
-          api.getEnkelrad(user.id),
+          api.getGarderingar(user.id),
         ]);
         setKupong(kupongData);
-        setGarderingar(radData);
-        savedGarderingar.current = radData;
+        setGarderingar(gardData);
+        savedGarderingar.current = gardData;
       } else if (statusData.speletOppet === 2) {
         const [kupongData, gardData] = await Promise.all([
           api.getKupong(),
@@ -202,26 +202,6 @@ export default function MinSidaScreen() {
       const filtered = prev.filter((g) => g.matchNr !== matchNr);
       return [...filtered, { matchNr, tecken }];
     });
-  };
-
-  const handleSaveEnkelrad = async () => {
-    if (!user) return;
-    if (garderingar.length !== 13) {
-      Alert.alert('Fel', `Du måste tippa alla 13 matcher (du har ${garderingar.length})`);
-      return;
-    }
-    try {
-      const result = await api.saveEnkelrad(user.id, garderingar);
-      if (result.success) {
-        savedGarderingar.current = [...garderingar];
-        Alert.alert('Sparat', 'Din enkelrad är sparad!');
-        loadData();
-      } else {
-        Alert.alert('Fel', result.error || 'Kunde inte spara');
-      }
-    } catch (error: any) {
-      Alert.alert('Fel', error.message);
-    }
   };
 
   const renderAnalysisModal = () => (
@@ -621,7 +601,7 @@ export default function MinSidaScreen() {
 
         <TouchableOpacity
           style={[styles.gardSaveBtn, !enkelReady && styles.gardSaveBtnDisabled]}
-          onPress={handleSaveEnkelrad}
+          onPress={handleSaveGarderingar}
           disabled={!enkelReady}
         >
           <Text style={[styles.gardSaveBtnText, !enkelReady && styles.gardSaveBtnTextDisabled]}>
