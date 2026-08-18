@@ -631,15 +631,15 @@ async function getLiveGarderingTable() {
     let table = [];
 
     if (isSlutspel === 1) {
-        // Slutspel: each user has their own enkelrad in TIT_tipsrad
+        // Slutspel: varje användares enkelrad ligger i TIT_garderingar (13 tecken)
         const [allTips] = await db.query(
-            'SELECT ansvarigId, matchNr, tecken FROM TIT_tipsrad WHERE spelomgang = ? ORDER BY ansvarigId, matchNr',
+            'SELECT id, matchNr, tecken FROM TIT_garderingar WHERE omgang = ? ORDER BY id, matchNr',
             [spelomgang]
         );
         const tipsByUser = {};
         for (const t of allTips) {
-            if (!tipsByUser[t.ansvarigId]) tipsByUser[t.ansvarigId] = {};
-            tipsByUser[t.ansvarigId][t.matchNr] = t.tecken;
+            if (!tipsByUser[t.id]) tipsByUser[t.id] = {};
+            tipsByUser[t.id][t.matchNr] = t.tecken;
         }
 
         for (const user of users) {
@@ -649,7 +649,7 @@ async function getLiveGarderingTable() {
             } else {
                 let ratt = 0;
                 for (let i = 1; i <= 13; i++) {
-                    if (userTips[i] && userTips[i] === liveResults[i - 1]) ratt++;
+                    if (userTips[i] && userTips[i] !== '-' && userTips[i] === liveResults[i - 1]) ratt++;
                 }
                 table.push({ userId: user.id, namn: `${user.fornamn} ${user.efternamn}`, ratt });
             }
@@ -1210,11 +1210,11 @@ async function getUserKupong(query) {
     const grundMap = {};
     for (const g of grundRows) grundMap[g.matchNr] = g;
 
-    // Get user's gardering/enkelrad
+    // Get user's gardering/enkelrad (enkelrad ligger i TIT_garderingar även i slutspel)
     let userTeckenMap = {};
     if (isSlutspel) {
         const [rows] = await db.query(
-            'SELECT matchNr, tecken FROM TIT_tipsrad WHERE spelomgang = ? AND ansvarigId = ? ORDER BY matchNr',
+            'SELECT matchNr, tecken FROM TIT_garderingar WHERE omgang = ? AND id = ? ORDER BY matchNr',
             [spelomgang, userId]
         );
         for (const r of rows) userTeckenMap[r.matchNr] = r.tecken;
@@ -1296,18 +1296,9 @@ async function getAllGarderingar(query) {
     // Get all users
     const [userRows] = await db.query("SELECT id, CONCAT(fornamn, ' ', efternamn) as namn FROM TIT_TipsTjanst ORDER BY id");
 
-    // Get all garderingar/enkelrader
+    // Get all garderingar/enkelrader (enkelrad ligger i TIT_garderingar även i slutspel)
     let teckenByUser = {};
-    if (isSlutspel) {
-        const [rows] = await db.query(
-            'SELECT ansvarigId, matchNr, tecken FROM TIT_tipsrad WHERE spelomgang = ? ORDER BY ansvarigId, matchNr',
-            [spelomgang]
-        );
-        for (const r of rows) {
-            if (!teckenByUser[r.ansvarigId]) teckenByUser[r.ansvarigId] = {};
-            teckenByUser[r.ansvarigId][r.matchNr] = r.tecken;
-        }
-    } else {
+    {
         const [rows] = await db.query(
             'SELECT id, matchNr, tecken FROM TIT_garderingar WHERE omgang = ? ORDER BY id, matchNr',
             [spelomgang]
