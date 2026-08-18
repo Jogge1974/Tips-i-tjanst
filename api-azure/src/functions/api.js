@@ -1436,6 +1436,9 @@ async function avslutaOmgang() {
     // 8. Update TipsAllsvenskan (only if not slutspel)
     if (!isSlutspel) {
         await updateTipsAllsvenskan(db, sasong);
+    } else {
+        // Slutspel: uppdatera slutspelstabellen (TIT_newSlutspel) för aktuell fas
+        await updateSlutspel(db, sasong, spelomgang);
     }
 
     return jsonResponse({ 
@@ -1444,8 +1447,79 @@ async function avslutaOmgang() {
         antalRatt, 
         insats, 
         vinst,
-        tipsAllsvenskanUpdated: !isSlutspel
+        tipsAllsvenskanUpdated: !isSlutspel,
+        slutspelUpdated: !!isSlutspel
     });
+}
+
+// Uppdatera slutspelstabellen för aktuell fas (motsvarar webbens UpdateSlutspel).
+// Fas (typ): 0=kvartsfinal, 1=semifinal, 2=final, utifrån hur många slutspels-
+// omgångar säsongen har t.o.m. denna omgång. resultat = enkelradens (TIT_garderingar)
+// antal rätt mot rättraden; sortpoang = seedning (TipsAllsvenskan-placering) som ärvs.
+async function updateSlutspel(db, sasong, spelomgang) {
+    // Vilken fas är denna slutspelsomgång? (0=kvart, 1=semi, 2=final)
+    const [slutRounds] = await db.query(
+        'SELECT COUNT(*) as cnt FROM TIT_ekonomi WHERE sasong = ? AND isSlutspel = 1 AND spelomgang <= ?',
+        [sasong, spelomgang]
+    );
+    const typ = slutRounds[0].cnt - 1;
+    if (typ < 0 || typ > 2) return;
+
+    // Rättraden för omgången
+    const [rattRows] = await db.query('SELECT matchNr, tecken FROM TIT_rattrad WHERE spelomgang = ?', [spelomgang]);
+    const rattMap = {};
+    for (const r of rattRows) rattMap[r.matchNr] = r.tecken;
+
+    // Deltagare + seedning (sortpoang)
+    let participants = []; // { id, namn, seed }
+    if (typ === 0) {
+        // Kvartsfinal: de 8 främsta i TipsAllsvenskan (seed = placering 1-8)
+        const [top8] = await db.query(
+            `SELECT a.id, CONCAT(u.fornamn, ' ', u.efternamn) as namn
+             FROM TIT_TipsAllsvenskan a JOIN TIT_TipsTjanst u ON u.id = a.id
+             WHERE a.sasong = ? ORDER BY a.poang DESC LIMIT 8`,
+            [sasong]
+        );
+        participants = top8.map((r, i) => ({ id: r.id, namn: r.namn, seed: i + 1 }));
+    } else {
+        // Semifinal (4 från kvart) / Final (2 från semi): bästa från föregående fas
+        const advanceCount = typ === 1 ? 4 : 2;
+        const [prev] = await db.query(
+            `SELECT id, namn, sortpoang FROM TIT_newSlutspel
+             WHERE sasong = ? AND typ = ?
+             ORDER BY resultat DESC, sortpoang ASC LIMIT ${advanceCount}`,
+            [sasong, typ - 1]
+        );
+        participants = prev.map(r => ({ id: r.id, namn: r.namn, seed: r.sortpoang }));
+    }
+
+    // Enkelradens (TIT_garderingar) antal rätt per deltagare
+    const [gardRows] = await db.query(
+        'SELECT id, matchNr, tecken FROM TIT_garderingar WHERE omgang = ?',
+        [spelomgang]
+    );
+    const enkelByUser = {};
+    for (const g of gardRows) {
+        (enkelByUser[g.id] ||= {})[g.matchNr] = g.tecken;
+    }
+    const calcRatt = (uid) => {
+        const m = enkelByUser[uid];
+        if (!m) return 0;
+        let c = 0;
+        for (let i = 1; i <= 13; i++) {
+            if (m[i] && m[i] !== '-' && m[i] === rattMap[i]) c++;
+        }
+        return c;
+    };
+
+    // Skriv om fasens rader (idempotent vid omkörning)
+    await db.query('DELETE FROM TIT_newSlutspel WHERE sasong = ? AND typ = ?', [sasong, typ]);
+    for (const p of participants) {
+        await db.query(
+            'INSERT INTO TIT_newSlutspel (sasong, typ, id, namn, sortpoang, resultat) VALUES (?, ?, ?, ?, ?, ?)',
+            [sasong, typ, p.id, p.namn, p.seed, calcRatt(p.id)]
+        );
+    }
 }
 
 // Helper: recalculate TipsAllsvenskan for a season

@@ -243,6 +243,7 @@ export const api = {
     insats: number;
     vinst: number;
     tipsAllsvenskanUpdated: boolean;
+    slutspelUpdated?: boolean;
   }> {
     const response = await fetch(`${API_BASE_URL}?action=avslutaOmgang`);
     if (!response.ok) throw new Error('Kunde inte avsluta omgång');

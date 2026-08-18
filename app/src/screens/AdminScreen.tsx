@@ -196,7 +196,7 @@ export default function AdminScreen() {
       if (json.success) {
         Alert.alert(
           'Omgång avslutad!',
-          `Omgång: ${json.spelomgang}\nAntal rätt: ${json.antalRatt}\nInsats: ${json.insats} rader\nVinst: ${json.vinst} kr${json.tipsAllsvenskanUpdated ? '\n\nTipsAllsvenskan uppdaterad ✓' : ''}`
+          `Omgång: ${json.spelomgang}\nAntal rätt: ${json.antalRatt}\nInsats: ${json.insats} rader\nVinst: ${json.vinst} kr${json.tipsAllsvenskanUpdated ? '\n\nTipsAllsvenskan uppdaterad ✓' : ''}${json.slutspelUpdated ? '\n\nSlutspelstabellen uppdaterad ✓' : ''}`
         );
         loadData();
         loadEkonomi();
@@ -782,7 +782,7 @@ export default function AdminScreen() {
             if (omgangStatus === 'avsluta') {
               Alert.alert(
                 'Avsluta omgång',
-                `Är du säker på att du vill avsluta omgång ${data.spelomgang}?\n\nDetta uppdaterar rätt rad, ekonomi och TipsAllsvenskan.`,
+                `Är du säker på att du vill avsluta omgång ${data.spelomgang}?\n\nDetta uppdaterar rätt rad, ekonomi och ${data.isSlutspel ? 'slutspelstabellen' : 'TipsAllsvenskan'}.`,
                 [
                   { text: 'Avbryt', style: 'cancel' },
                   { text: 'Avsluta', style: 'destructive', onPress: handleAvslutaOmgang },
