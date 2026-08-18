@@ -101,7 +101,16 @@ export default function MinSidaScreen() {
       }
 
       // Om garderingsläge, hämta kupong och befintliga garderingar
-      if (statusData.speletOppet === 2) {
+      if (statusData.isSlutspel === 1 && statusData.speletOppet !== 0) {
+        // Slutspel: enkelrad öppen hela veckan
+        const [kupongData, radData] = await Promise.all([
+          api.getKupong(),
+          api.getEnkelrad(user.id),
+        ]);
+        setKupong(kupongData);
+        setGarderingar(radData);
+        savedGarderingar.current = radData;
+      } else if (statusData.speletOppet === 2) {
         const [kupongData, gardData] = await Promise.all([
           api.getKupong(),
           api.getGarderingar(user.id),
@@ -186,6 +195,149 @@ export default function MinSidaScreen() {
       Alert.alert('Fel', error.message);
     }
   };
+
+  // Slutspel: välj exakt ett tecken per match
+  const handleEnkelradPress = (matchNr: number, tecken: string) => {
+    setGarderingar((prev) => {
+      const filtered = prev.filter((g) => g.matchNr !== matchNr);
+      return [...filtered, { matchNr, tecken }];
+    });
+  };
+
+  const handleSaveEnkelrad = async () => {
+    if (!user) return;
+    if (garderingar.length !== 13) {
+      Alert.alert('Fel', `Du måste tippa alla 13 matcher (du har ${garderingar.length})`);
+      return;
+    }
+    try {
+      const result = await api.saveEnkelrad(user.id, garderingar);
+      if (result.success) {
+        savedGarderingar.current = [...garderingar];
+        Alert.alert('Sparat', 'Din enkelrad är sparad!');
+        loadData();
+      } else {
+        Alert.alert('Fel', result.error || 'Kunde inte spara');
+      }
+    } catch (error: any) {
+      Alert.alert('Fel', error.message);
+    }
+  };
+
+  const renderAnalysisModal = () => (
+    <Modal visible={analysisModal.visible} transparent animationType="slide">
+      <View style={styles.analysisOverlay}>
+        <ScrollView style={styles.analysisContent} contentContainerStyle={{ paddingBottom: 20 }}>
+          <Text style={styles.analysisTitle}>
+            {analysisModal.eventHome} vs {analysisModal.eventAway}
+          </Text>
+          <Text style={styles.analysisLeague}>{analysisModal.league}</Text>
+
+          {analysisModal.loading ? (
+            <ActivityIndicator color="#1B5E20" style={{ marginVertical: 24 }} />
+          ) : (
+            <>
+              <View style={styles.analysisTeams}>
+                {[analysisModal.home, analysisModal.away].map((team, i) => (
+                  team ? (
+                    <View key={i} style={styles.analysisTeamCard}>
+                      {team.logo && <Image source={{ uri: team.logo }} style={styles.teamLogo} />}
+                      <View style={styles.analysisTeamInfo}>
+                        <View style={styles.analysisPositionRow}>
+                          <Text style={styles.analysisPosition}>#{team.position}</Text>
+                          <Text style={styles.analysisTeamName}>{team.name}</Text>
+                        </View>
+                        {team.form && (
+                          <View style={styles.formRow}>
+                            {team.form.map((m: any, fi: number) => (
+                              <View key={fi} style={[
+                                styles.formBadge,
+                                m.result === 'V' && styles.formWin,
+                                m.result === 'O' && styles.formDraw,
+                                m.result === 'F' && styles.formLoss,
+                              ]}>
+                                <Text style={styles.formBadgeText}>{m.result}</Text>
+                              </View>
+                            ))}
+                          </View>
+                        )}
+                      </View>
+                    </View>
+                  ) : (
+                    <View key={i} style={styles.analysisTeamCard}>
+                      <Text style={styles.analysisNoData}>Tabelldata saknas</Text>
+                    </View>
+                  )
+                ))}
+              </View>
+
+              {analysisModal.standings.length > 0 && (
+                <View style={styles.standingsTable}>
+                  <View style={styles.standingsHeader}>
+                    <Text style={[styles.standingsCell, styles.standingsPosCol, styles.standingsHeaderText]}>#</Text>
+                    <Text style={[styles.standingsCell, styles.standingsTeamCol, styles.standingsHeaderText]}>Lag</Text>
+                    <Text style={[styles.standingsCell, styles.standingsNumCol, styles.standingsHeaderText]}>Sp</Text>
+                    <Text style={[styles.standingsCell, styles.standingsNumCol, styles.standingsHeaderText]}>V</Text>
+                    <Text style={[styles.standingsCell, styles.standingsNumCol, styles.standingsHeaderText]}>O</Text>
+                    <Text style={[styles.standingsCell, styles.standingsNumCol, styles.standingsHeaderText]}>F</Text>
+                    <Text style={[styles.standingsCell, styles.standingsGoalCol, styles.standingsHeaderText]}>Mål</Text>
+                    <Text style={[styles.standingsCell, styles.standingsNumCol, styles.standingsHeaderText]}>Po</Text>
+                  </View>
+                  {analysisModal.standings.map((t: any, idx: number) => {
+                    const isHighlighted = t.name === analysisModal.home?.name || t.name === analysisModal.away?.name;
+                    return (
+                      <View key={idx} style={[styles.standingsRow, isHighlighted && styles.standingsHighlight]}>
+                        <Text style={[styles.standingsCell, styles.standingsPosCol, isHighlighted && styles.standingsHighlightText]}>{t.position}</Text>
+                        <Text style={[styles.standingsCell, styles.standingsTeamCol, isHighlighted && styles.standingsHighlightText]} numberOfLines={1}>{t.name}</Text>
+                        <Text style={[styles.standingsCell, styles.standingsNumCol]}>{t.played}</Text>
+                        <Text style={[styles.standingsCell, styles.standingsNumCol]}>{t.wins}</Text>
+                        <Text style={[styles.standingsCell, styles.standingsNumCol]}>{t.draws}</Text>
+                        <Text style={[styles.standingsCell, styles.standingsNumCol]}>{t.losses}</Text>
+                        <Text style={[styles.standingsCell, styles.standingsGoalCol]}>{t.goalsFor}-{t.goalsAgainst}</Text>
+                        <Text style={[styles.standingsCell, styles.standingsNumCol, { fontWeight: '700' }]}>{t.points}</Text>
+                      </View>
+                    );
+                  })}
+                </View>
+              )}
+            </>
+          )}
+
+          {!analysisModal.loading && (
+            <View style={styles.aiSection}>
+              {!aiAnalysis && !aiLoading && !aiError && (
+                <TouchableOpacity
+                  style={styles.aiBtn}
+                  onPress={() => fetchAiAnalysis(analysisModal.eventHome, analysisModal.eventAway, analysisModal.league)}
+                >
+                  <Text style={styles.aiBtnText}>🤖 AI-analys av matchen</Text>
+                </TouchableOpacity>
+              )}
+              {aiLoading && <ActivityIndicator color="#6A1B9A" style={{ marginVertical: 12 }} />}
+              {aiError && (
+                <View style={styles.aiErrorBox}>
+                  <Text style={styles.aiErrorText}>{aiError}</Text>
+                </View>
+              )}
+              {aiAnalysis && (
+                <View style={styles.aiResultBox}>
+                  <Text style={styles.aiResultLabel}>🤖 AI-analys</Text>
+                  <Text style={styles.aiResultText}>{aiAnalysis}</Text>
+                </View>
+              )}
+            </View>
+          )}
+
+          <TouchableOpacity
+            style={styles.closeAnalysisBtn}
+            onPress={() => { setAnalysisModal(prev => ({ ...prev, visible: false })); setAiAnalysis(null); setAiError(null); }}
+          >
+            <Text style={styles.closeAnalysisBtnText}>Stäng</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </View>
+    </Modal>
+  );
 
   if (isLoading) {
     return (
@@ -386,6 +538,99 @@ export default function MinSidaScreen() {
           </View>
         </Modal>
       </View>
+    );
+  }
+
+  // Slutspel: enkelrad (tippa alla 13 matcher) – öppet hela veckan t.o.m. fredag kl 12
+  if (status.isSlutspel === 1) {
+    const filled = garderingar.length;
+    const enkelReady = filled === 13;
+    const enkelBarPct = Math.min((filled / 13) * 100, 100);
+    const enkelBarColor = enkelReady ? '#1B5E20' : '#F57C00';
+    const enkelUnsaved = JSON.stringify(
+      [...garderingar].sort((a, b) => a.matchNr - b.matchNr)
+    ) !== JSON.stringify(
+      [...savedGarderingar.current].sort((a, b) => a.matchNr - b.matchNr)
+    );
+
+    return (
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={{ paddingBottom: 80 }}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      >
+        <View style={styles.gardHeader}>
+          <Text style={styles.gardHeaderIcon}>📝</Text>
+          <Text style={styles.gardHeaderTitle}>Tippa enkelrad</Text>
+          <Text style={styles.gardHeaderSub}>Omgång {status.spelomgang}</Text>
+        </View>
+
+        <View style={[styles.gardCounterCard, enkelReady && styles.gardCounterCardReady]}>
+          <View style={styles.gardCounterBar}>
+            <View style={[styles.gardCounterFill, { width: `${enkelBarPct}%`, backgroundColor: enkelBarColor }]} />
+          </View>
+          <Text style={styles.gardCounterText}>{filled} / 13 tecken</Text>
+          {!enkelReady && (
+            <Text style={[styles.gardStatusMsg, { color: enkelBarColor }]}>
+              {13 - filled} match{13 - filled === 1 ? '' : 'er'} kvar
+            </Text>
+          )}
+          {enkelUnsaved && (
+            <Text style={styles.gardUnsavedText}>⚠ Ändringar ej sparade</Text>
+          )}
+        </View>
+
+        <View style={styles.gardCard}>
+          {kupong.map((match, matchIdx) => (
+            <View key={match.matchNr} style={[styles.gardMatchRow, matchIdx % 2 === 0 && styles.gardMatchRowAlt]}>
+              <Text style={styles.gardMatchNr}>{match.matchNr}</Text>
+              <TouchableOpacity style={styles.gardMatchInfo} onPress={() => openAnalysis(match)}>
+                <Text style={styles.gardMatchLag} numberOfLines={1}>{match.lag}</Text>
+                <Text style={styles.gardMatchLiga}>{match.liga}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.gardBarIcon} onPress={() => openAnalysis(match)}>
+                <View style={[styles.gardBar, { height: 8 }]} />
+                <View style={[styles.gardBar, { height: 14 }]} />
+                <View style={[styles.gardBar, { height: 11 }]} />
+              </TouchableOpacity>
+              <View style={styles.gardTeckenRow}>
+                {['1', 'X', '2'].map((t) => {
+                  const isSelected = garderingar.some(
+                    (g) => g.matchNr === parseInt(match.matchNr) && g.tecken === t
+                  );
+                  const odds = t === '1' ? match.odds1 : t === 'X' ? match.oddsX : match.odds2;
+                  return (
+                    <TouchableOpacity
+                      key={t}
+                      style={[styles.gardTeckenBtn, isSelected && styles.gardTeckenActive]}
+                      onPress={() => handleEnkelradPress(parseInt(match.matchNr), t)}
+                    >
+                      <Text style={[styles.gardTeckenText, isSelected && styles.gardTeckenTextActive]}>{t}</Text>
+                      {odds && (
+                        <Text style={[styles.gardOddsText, isSelected && styles.gardOddsTextActive]}>
+                          {Number(odds).toFixed(2)}
+                        </Text>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+          ))}
+        </View>
+
+        <TouchableOpacity
+          style={[styles.gardSaveBtn, !enkelReady && styles.gardSaveBtnDisabled]}
+          onPress={handleSaveEnkelrad}
+          disabled={!enkelReady}
+        >
+          <Text style={[styles.gardSaveBtnText, !enkelReady && styles.gardSaveBtnTextDisabled]}>
+            Spara enkelrad
+          </Text>
+        </TouchableOpacity>
+
+        {renderAnalysisModal()}
+      </ScrollView>
     );
   }
 

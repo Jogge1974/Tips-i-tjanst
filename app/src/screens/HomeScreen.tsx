@@ -26,14 +26,15 @@ interface DashboardData {
   hasTipped: boolean;
   hasGardering: boolean;
   liveState: 'waiting' | 'live' | 'finished';
+  message?: string;
 }
 
-function getCountdown(speletOppet: number): string {
+function getCountdown(speletOppet: number, isSlutspel: number): string {
   const now = new Date();
   const swe = new Date(now.getTime() + 2 * 60 * 60 * 1000); // UTC+2
   let target: Date;
 
-  if (speletOppet === 1) {
+  if (!isSlutspel && speletOppet === 1) {
     // Tips open → deadline Thursday 12:00
     target = new Date(swe);
     const day = target.getDay();
@@ -41,8 +42,8 @@ function getCountdown(speletOppet: number): string {
     if (daysToThu === 0 && target.getHours() >= 12) daysToThu = 7;
     target.setDate(target.getDate() + daysToThu);
     target.setHours(12, 0, 0, 0);
-  } else if (speletOppet === 2) {
-    // Gardering open → deadline Friday 12:00
+  } else if (isSlutspel || speletOppet === 2) {
+    // Gardering/enkelrad open → deadline Friday 12:00
     target = new Date(swe);
     const day = target.getDay();
     let daysToFri = (5 - day + 7) % 7;
@@ -107,9 +108,34 @@ export default function HomeScreen() {
   if (!data) return null;
 
   const { status, seasonEconomy, leader, myPosition, myPoang, slutspelsInfo, lastResult, streak, hasTipped, hasGardering, liveState } = data;
-  const countdown = getCountdown(status.speletOppet);
+  const countdown = getCountdown(status.speletOppet, status.isSlutspel);
+  const adminMessage = (data.message || '').trim();
 
   const renderStatusBanner = () => {
+    // Slutspel: enkelrad lämnas hela veckan (fram t.o.m. fredag kl 12)
+    if (status.isSlutspel === 1 && (status.speletOppet === 1 || status.speletOppet === 2)) {
+      return (
+        <TouchableOpacity
+          style={[styles.statusBanner, hasTipped ? styles.bannerDone : styles.bannerGardering]}
+          onPress={() => navigation.navigate('MinSida')}
+          activeOpacity={0.8}
+        >
+          <View style={styles.bannerLeft}>
+            <Ionicons name={hasTipped ? 'checkmark-circle' : 'create'} size={28} color="#fff" />
+          </View>
+          <View style={styles.bannerContent}>
+            <Text style={styles.bannerTitle}>
+              {hasTipped ? 'Enkelrad lämnad ✓' : 'Lämna enkelrad'}
+            </Text>
+            <Text style={styles.bannerSub}>
+              {hasTipped ? `Omgång ${status.spelomgang}` : `Spelstopp om ${countdown}`}
+            </Text>
+          </View>
+          {!hasTipped && <Ionicons name="chevron-forward" size={24} color="#fff" />}
+        </TouchableOpacity>
+      );
+    }
+
     if (status.speletOppet === 1) {
       return (
         <TouchableOpacity
@@ -241,6 +267,17 @@ export default function HomeScreen() {
 
       {/* Status banner */}
       {renderStatusBanner()}
+
+      {/* Admin message */}
+      {adminMessage !== '' && (
+        <View style={styles.messageCard}>
+          <View style={styles.messageHeader}>
+            <Ionicons name="megaphone" size={16} color="#1B5E20" />
+            <Text style={styles.messageTitle}>Meddelande från ordförarn</Text>
+          </View>
+          <Text style={styles.messageText}>{adminMessage}</Text>
+        </View>
+      )}
 
       {/* Last result card - split view */}
       {lastResult && (() => {
@@ -388,6 +425,35 @@ const styles = StyleSheet.create({
   bannerSub: { fontSize: 13, color: 'rgba(255,255,255,0.85)', marginTop: 2 },
   bannerSubDark: { fontSize: 13, color: '#4CAF50', marginTop: 2 },
   liveDot: { width: 12, height: 12, borderRadius: 6, backgroundColor: '#fff' },
+
+  // Admin message card
+  messageCard: {
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    borderLeftWidth: 4,
+    borderLeftColor: '#1B5E20',
+    padding: 16,
+    marginBottom: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  messageHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+    gap: 6,
+  },
+  messageTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#1B5E20',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  messageText: { fontSize: 15, lineHeight: 22, color: '#333' },
 
   // Grid
   grid: { flexDirection: 'row', gap: 12, marginBottom: 12 },

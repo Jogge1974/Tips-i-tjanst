@@ -216,7 +216,15 @@ async function getDashboard(query) {
         'SELECT matchNr FROM TIT_tipsrad WHERE spelomgang = ? AND ansvarigId = ? LIMIT 1',
         [spelomgang, userId]
     );
-    const hasTipped = tipsrad.length > 0;
+    // In slutspel a completed submission = full enkelrad (all 13 signs)
+    let hasTipped = tipsrad.length > 0;
+    if (current.isSlutspel === 1) {
+        const [enkelCount] = await db.query(
+            'SELECT COUNT(*) as cnt FROM TIT_tipsrad WHERE spelomgang = ? AND ansvarigId = ?',
+            [spelomgang, userId]
+        );
+        hasTipped = enkelCount[0].cnt >= 13;
+    }
 
     // Has user submitted garderingar?
     const [gard] = await db.query(
@@ -451,6 +459,67 @@ async function saveGarderingar(body) {
         await db.query(
             'INSERT INTO TIT_garderingar (omgang, id, matchNr, tecken) VALUES (?, ?, ?, ?)',
             [spelomgang, userId, matchNr, tecken]
+        );
+    }
+
+    return jsonResponse({ success: true });
+}
+
+// GET ENKELRAD - the user's single row for a slutspel round (from TIT_tipsrad)
+async function getEnkelrad(query) {
+    const userId = query.userId;
+    if (!userId) return jsonResponse({ error: 'Saknar userId' }, 400);
+    const db = getPool();
+    const [ekoRows] = await db.query('SELECT spelomgang FROM TIT_ekonomi ORDER BY spelomgang DESC LIMIT 1');
+    const spelomgang = ekoRows.length ? ekoRows[0].spelomgang : '';
+    const [rows] = await db.query(
+        'SELECT matchNr, tecken FROM TIT_tipsrad WHERE spelomgang = ? AND ansvarigId = ? ORDER BY matchNr',
+        [spelomgang, userId]
+    );
+    return jsonResponse(rows);
+}
+
+// SAVE ENKELRAD - slutspel: user tips one sign for all 13 matches (stored in TIT_tipsrad)
+async function saveEnkelrad(body) {
+    const { userId, rad } = body;
+    if (!userId || !Array.isArray(rad)) {
+        return jsonResponse({ error: 'Saknar data' }, 400);
+    }
+
+    const db = getPool();
+
+    const [ekoRows] = await db.query('SELECT spelomgang, isSlutspel FROM TIT_ekonomi ORDER BY spelomgang DESC LIMIT 1');
+    const spelomgang = ekoRows.length ? ekoRows[0].spelomgang : '';
+    const isSlutspel = ekoRows.length ? ekoRows[0].isSlutspel : 0;
+
+    if (isSlutspel !== 1) {
+        return jsonResponse({ error: 'Enkelrad kan bara lämnas i slutspelsomgångar' }, 403);
+    }
+
+    // Open the whole week (any admin-open phase), unlike garderingar
+    const status = await speletOppet(db);
+    if (status === 0) {
+        return jsonResponse({ error: 'Spelet är stängt' }, 403);
+    }
+
+    // Validate: exactly one valid tecken for each of matches 1-13
+    const byMatch = {};
+    for (const r of rad) {
+        const mn = parseInt(r.matchNr);
+        if (mn >= 1 && mn <= 13 && ['1', 'X', '2'].includes(r.tecken)) {
+            byMatch[mn] = r.tecken;
+        }
+    }
+    if (Object.keys(byMatch).length !== 13) {
+        return jsonResponse({ error: 'Du måste tippa alla 13 matcher' }, 400);
+    }
+
+    // Replace the user's enkelrad in TIT_tipsrad
+    await db.query('DELETE FROM TIT_tipsrad WHERE spelomgang = ? AND ansvarigId = ?', [spelomgang, userId]);
+    for (let mn = 1; mn <= 13; mn++) {
+        await db.query(
+            'INSERT INTO TIT_tipsrad (spelomgang, matchNr, tecken, poangGrund, ansvarigId, slutspel) VALUES (?, ?, ?, 0, ?, 1)',
+            [spelomgang, mn, byMatch[mn], userId]
         );
     }
 
@@ -2025,9 +2094,10 @@ async function checkAndSendNotifications(context) {
     const sweMinutes = now.getUTCMinutes();
 
     // Get current spelomgang
-    const [ekoRows] = await db.query('SELECT spelomgang, drawNumber FROM TIT_ekonomi ORDER BY spelomgang DESC LIMIT 1');
+    const [ekoRows] = await db.query('SELECT spelomgang, drawNumber, isSlutspel FROM TIT_ekonomi ORDER BY spelomgang DESC LIMIT 1');
     if (!ekoRows.length) return;
     const spelomgang = ekoRows[0].spelomgang;
+    const isSlutspel = ekoRows[0].isSlutspel === 1;
 
     // === NOTIS 1: Ny kupong ute ===
     // Tue-Thu, Tue from 08:00, stop at Thu 12:00
@@ -2037,7 +2107,7 @@ async function checkAndSendNotifications(context) {
     const isFri = sweDay === 5;
     const inNotis1Window = (isTue && sweHour >= 8) || isWed || (isThu && sweHour < 12);
 
-    if (inNotis1Window) {
+    if (!isSlutspel && inNotis1Window) {
         // Find users who have a lottning but haven't tipped yet
         const [untipped] = await db.query(
             `SELECT DISTINCT l.ansvarigId as userId
@@ -2077,7 +2147,7 @@ async function checkAndSendNotifications(context) {
     }
 
     // === NOTIS 2: Snart spelstopp (kl 10) ===
-    if (isThu && sweHour === 10) {
+    if (!isSlutspel && isThu && sweHour === 10) {
         const [alreadySent] = await db.query(
             "SELECT id FROM TIT_push_log WHERE notisType = 'spelstopp_10' AND spelomgang = ? LIMIT 1",
             [spelomgang]
@@ -2106,7 +2176,7 @@ async function checkAndSendNotifications(context) {
     }
 
     // === NOTIS 3: Snart spelstopp (kl 11:45) ===
-    if (isThu && sweHour === 11 && now.getUTCMinutes() >= 43 && now.getUTCMinutes() <= 47) {
+    if (!isSlutspel && isThu && sweHour === 11 && now.getUTCMinutes() >= 43 && now.getUTCMinutes() <= 47) {
         const [alreadySent] = await db.query(
             "SELECT id FROM TIT_push_log WHERE notisType = 'spelstopp_1145' AND spelomgang = ? LIMIT 1",
             [spelomgang]
@@ -2135,7 +2205,7 @@ async function checkAndSendNotifications(context) {
     }
 
     // === NOTIS 3b: Garderingsspelet öppet (torsdag kl 12:15) ===
-    if (isThu && sweHour === 12 && sweMinutes >= 13 && sweMinutes <= 17) {
+    if (!isSlutspel && isThu && sweHour === 12 && sweMinutes >= 13 && sweMinutes <= 17) {
         const [alreadySent] = await db.query(
             "SELECT id FROM TIT_push_log WHERE notisType = 'gardering_oppet' AND spelomgang = ? LIMIT 1",
             [spelomgang]
@@ -2165,7 +2235,7 @@ async function checkAndSendNotifications(context) {
     }
 
     // === NOTIS 3c: Garderingsspelet stänger snart (fredag kl 11:50) ===
-    if (isFri && sweHour === 11 && sweMinutes >= 48 && sweMinutes <= 52) {
+    if (!isSlutspel && isFri && sweHour === 11 && sweMinutes >= 48 && sweMinutes <= 52) {
         const [alreadySent] = await db.query(
             "SELECT id FROM TIT_push_log WHERE notisType = 'gardering_spelstopp' AND spelomgang = ? LIMIT 1",
             [spelomgang]
@@ -2193,6 +2263,46 @@ async function checkAndSendNotifications(context) {
                 await db.query(
                     'INSERT IGNORE INTO TIT_push_log (userId, notisType, spelomgang) VALUES (?, ?, ?)',
                     [row.userId, 'gardering_spelstopp', spelomgang]
+                );
+            }
+        }
+    }
+
+    // === NOTIS 3d + 3e: Slutspel - påminnelse om enkelrad (fredag kl 10 + 11:45) ===
+    // Enkelraden kan lämnas hela veckan t.o.m. fredag kl 12, så ingen påminnelse förrän fredag kl 10.
+    if (isSlutspel && isFri) {
+        const enkelReminders = [];
+        if (sweHour === 10 && sweMinutes <= 4) {
+            enkelReminders.push({ type: 'enkelrad_10', body: 'Enkelraden stänger kl 12. Lämna din rad i appen.' });
+        }
+        if (sweHour === 11 && sweMinutes >= 43 && sweMinutes <= 47) {
+            enkelReminders.push({ type: 'enkelrad_1145', body: '15 minuter kvar till spelstopp – lämna din enkelrad.' });
+        }
+        for (const rem of enkelReminders) {
+            const [alreadySent] = await db.query(
+                'SELECT id FROM TIT_push_log WHERE notisType = ? AND spelomgang = ? LIMIT 1',
+                [rem.type, spelomgang]
+            );
+            if (alreadySent.length) continue;
+            // Users with a push token who have NOT submitted a complete enkelrad (13 signs)
+            const [untipped] = await db.query(
+                `SELECT DISTINCT pt.userId
+                 FROM TIT_push_tokens pt
+                 WHERE pt.notis_spelstopp = 1
+                   AND (SELECT COUNT(*) FROM TIT_tipsrad t
+                        WHERE t.spelomgang = ? AND t.ansvarigId = pt.userId) < 13`,
+                [spelomgang]
+            );
+            for (const row of untipped) {
+                const [tokens] = await db.query(
+                    'SELECT pushToken FROM TIT_push_tokens WHERE userId = ? AND notis_spelstopp = 1',
+                    [row.userId]
+                );
+                if (!tokens.length) continue;
+                await sendExpoPush(tokens.map(t => t.pushToken), 'Snart spelstopp', rem.body);
+                await db.query(
+                    'INSERT IGNORE INTO TIT_push_log (userId, notisType, spelomgang) VALUES (?, ?, ?)',
+                    [row.userId, rem.type, spelomgang]
                 );
             }
         }
@@ -2441,6 +2551,10 @@ app.http('api', {
                     return await getGarderingar(params);
                 case 'saveGarderingar':
                     return await saveGarderingar(params);
+                case 'getEnkelrad':
+                    return await getEnkelrad(params);
+                case 'saveEnkelrad':
+                    return await saveEnkelrad(params);
                 case 'getLiveDraw':
                     return await getLiveDraw();
                 case 'getLiveResult':
