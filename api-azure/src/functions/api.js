@@ -84,6 +84,77 @@ async function ensureMessageSchema(db) {
     messageSchemaEnsured = true;
 }
 
+// Ensure målrapport schema exists (goal log + last-seen scores per round)
+let mallistaSchemaEnsured = false;
+async function ensureMallistaSchema(db) {
+    if (mallistaSchemaEnsured) return;
+    await db.query(`CREATE TABLE IF NOT EXISTS TIT_mallista (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        spelomgang VARCHAR(20),
+        eventNumber INT,
+        home VARCHAR(100),
+        away VARCHAR(100),
+        fromScore VARCHAR(10),
+        toScore VARCHAR(10),
+        detectedAtMs BIGINT,
+        INDEX idx_mallista_spelomgang (spelomgang)
+    )`);
+    await db.query(`CREATE TABLE IF NOT EXISTS TIT_livescore (
+        spelomgang VARCHAR(20),
+        eventNumber INT,
+        score VARCHAR(10),
+        PRIMARY KEY (spelomgang, eventNumber)
+    )`);
+    mallistaSchemaEnsured = true;
+}
+
+// Upptäck och logga måländringar under live. Körs från timer-funktionen så att
+// listan byggs upp på servern oavsett om någon app-användare är aktiv.
+async function detectGoals(db, spelomgang, events) {
+    if (!spelomgang || !events || !events.length) return;
+    await ensureMallistaSchema(db);
+    const [prev] = await db.query('SELECT eventNumber, score FROM TIT_livescore WHERE spelomgang = ?', [spelomgang]);
+    const prevMap = {};
+    for (const p of prev) prevMap[p.eventNumber] = p.score;
+
+    const now = Date.now();
+    for (const e of events) {
+        if (!e.outcomeScore) continue; // ej startad / inget resultat än
+        const cur = e.outcomeScore;
+        const evNr = e.eventNumber;
+        const known = prevMap[evNr];
+        if (known === undefined) {
+            // Första observationen = baslinje, logga inget mål
+            await db.query(
+                'INSERT INTO TIT_livescore (spelomgang, eventNumber, score) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE score = VALUES(score)',
+                [spelomgang, evNr, cur]
+            );
+        } else if (known !== cur) {
+            const parts = (e.description || '').split('-');
+            const home = parts[0] ? parts[0].trim() : '';
+            const away = parts.length > 1 ? parts.slice(1).join('-').trim() : '';
+            await db.query(
+                'INSERT INTO TIT_mallista (spelomgang, eventNumber, home, away, fromScore, toScore, detectedAtMs) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                [spelomgang, evNr, home, away, known, cur, now]
+            );
+            await db.query('UPDATE TIT_livescore SET score = ? WHERE spelomgang = ? AND eventNumber = ?', [cur, spelomgang, evNr]);
+        }
+    }
+}
+
+// GET MÅLLISTA - goal report for the current round (newest first)
+async function getMallista() {
+    const db = getPool();
+    await ensureMallistaSchema(db);
+    const [ekoRows] = await db.query('SELECT spelomgang FROM TIT_ekonomi ORDER BY spelomgang DESC LIMIT 1');
+    const spelomgang = ekoRows.length ? ekoRows[0].spelomgang : '';
+    const [rows] = await db.query(
+        'SELECT eventNumber, home, away, fromScore, toScore, detectedAtMs FROM TIT_mallista WHERE spelomgang = ? ORDER BY detectedAtMs DESC, id DESC',
+        [spelomgang]
+    );
+    return jsonResponse(rows);
+}
+
 // GET USERS
 async function getUsers() {
     const db = getPool();
@@ -1724,6 +1795,11 @@ async function startNyOmgang(params) {
     // 4. Set game to open
     await db.query('UPDATE TIT_admin SET speletOppet = 1');
 
+    // 5. Nollställ målrapporten (sparas bara för aktuell omgång)
+    await ensureMallistaSchema(db);
+    await db.query('DELETE FROM TIT_mallista');
+    await db.query('DELETE FROM TIT_livescore');
+
     return jsonResponse({
         success: true,
         spelomgang,
@@ -2427,6 +2503,9 @@ async function checkAndSendNotifications(context) {
     if (!forecast || !forecast.events || !forecast.events.length) return;
 
     const events = forecast.events;
+
+    // Bygg upp målrapporten (måländringar sedan förra hämtningen)
+    try { await detectGoals(db, spelomgang, events); } catch (e) { context.log('detectGoals error:', e); }
     const started = events.filter(e => e.sportEventStatus !== 'Inte startat');
     const finished = events.filter(e => e.isFinished || e.cancelled);
 
@@ -2666,6 +2745,8 @@ app.http('api', {
                     return await getSystemRows(params);
                 case 'getLiveGarderingTable':
                     return await getLiveGarderingTable();
+                case 'getMallista':
+                    return await getMallista();
                 case 'getGrundtipsen':
                     return await getGrundtipsen();
                 case 'getMatchAnalysis':

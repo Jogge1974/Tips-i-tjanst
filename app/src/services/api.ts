@@ -184,6 +184,12 @@ export const api = {
     return response.json();
   },
 
+  async getMallista(): Promise<{ eventNumber: number; home: string; away: string; fromScore: string; toScore: string; detectedAtMs: number }[]> {
+    const response = await fetch(`${API_BASE_URL}?action=getMallista`);
+    if (!response.ok) throw new Error('Kunde inte hämta målrapport');
+    return response.json();
+  },
+
   async getGrundtipsen(): Promise<{ matchNr: number; ansvarig: string; tecken: string | null; isCorrect: boolean | null; isSTMF: boolean; odds: number; score: string | null; status: string; isFinished: boolean; cancelled: boolean; sportEventStart: string }[]> {
     const response = await fetch(`${API_BASE_URL}?action=getGrundtipsen`);
     if (!response.ok) throw new Error('Kunde inte hämta grundtipsen');

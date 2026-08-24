@@ -117,6 +117,8 @@ export default function LiveScreen() {
   const [utdelningExpanded, setUtdelningExpanded] = useState(false);
   const [garderingExpanded, setGarderingExpanded] = useState(false);
   const [grundtipsenExpanded, setGrundtipsenExpanded] = useState(false);
+  const [mallista, setMallista] = useState<{ eventNumber: number; home: string; away: string; fromScore: string; toScore: string; detectedAtMs: number }[]>([]);
+  const [malrapportExpanded, setMalrapportExpanded] = useState(true);
   // Valt utfall (tecken) för "Utdelning vid olika utfall" när en match återstår.
   // null = följ matchens aktuella liveresultat.
   const [selectedDistSign, setSelectedDistSign] = useState<string | null>(null);
@@ -196,6 +198,12 @@ export default function LiveScreen() {
       try {
         const grundData = await api.getGrundtipsen();
         setGrundtipsen(grundData);
+      } catch (e) { /* ignore */ }
+
+      // Fetch målrapport
+      try {
+        const malData = await api.getMallista();
+        setMallista(malData);
       } catch (e) { /* ignore */ }
     } catch (error: any) {
       console.error('Live error:', error);
@@ -711,6 +719,66 @@ export default function LiveScreen() {
             </ScrollView>
           </View>
         </View>
+      )}
+
+      {/* Målrapport - expandable */}
+      {(!noneStarted || mallista.length > 0) && (
+        <TouchableOpacity
+          style={styles.card}
+          activeOpacity={0.8}
+          onPress={() => setMalrapportExpanded(!malrapportExpanded)}
+        >
+          <View style={styles.expandableHeader}>
+            <View style={styles.cardTitleRow}>
+              <Ionicons name="football-outline" size={20} color="#1B5E20" />
+              <Text style={styles.cardTitle}>Målrapport</Text>
+              {mallista.length > 0 && (
+                <View style={styles.malCountBadge}>
+                  <Text style={styles.malCountText}>{mallista.length}</Text>
+                </View>
+              )}
+            </View>
+            <Text style={styles.expandArrow}>{malrapportExpanded ? '▲' : '▼'}</Text>
+          </View>
+          {malrapportExpanded && (
+            <View style={styles.expandableContent}>
+              {mallista.length === 0 ? (
+                <Text style={styles.malEmpty}>Inga mål ännu – vi bevakar matcherna ⚽</Text>
+              ) : (
+                mallista.map((g, idx) => {
+                  const fh = parseInt(g.fromScore.split('-')[0]) || 0;
+                  const fa = parseInt(g.fromScore.split('-')[1]) || 0;
+                  const th = parseInt(g.toScore.split('-')[0]) || 0;
+                  const ta = parseInt(g.toScore.split('-')[1]) || 0;
+                  const homeScored = th > fh;
+                  const awayScored = ta > fa;
+                  const time = new Date(g.detectedAtMs).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+                  return (
+                    <View key={idx} style={[styles.malRow, idx < mallista.length - 1 && styles.malRowBorder]}>
+                      <View style={styles.malNrBadge}>
+                        <Text style={styles.malNrText}>{g.eventNumber}</Text>
+                      </View>
+                      <View style={styles.malInfo}>
+                        <Text style={styles.malTeams} numberOfLines={1}>
+                          <Text style={homeScored ? styles.malScorer : undefined}>{g.home}</Text>
+                          <Text style={styles.malVs}> – </Text>
+                          <Text style={awayScored ? styles.malScorer : undefined}>{g.away}</Text>
+                        </Text>
+                        <Text style={styles.malScoreChange}>
+                          {g.fromScore} <Text style={styles.malArrow}>→</Text> <Text style={styles.malScoreNew}>{g.toScore}</Text>
+                        </Text>
+                      </View>
+                      <View style={styles.malTimeCol}>
+                        <Text style={styles.malTimeLabel}>ca</Text>
+                        <Text style={styles.malTime}>{time}</Text>
+                      </View>
+                    </View>
+                  );
+                })
+              )}
+            </View>
+          )}
+        </TouchableOpacity>
       )}
 
       {/* Preliminär utdelning - expandable */}
@@ -1824,6 +1892,49 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '800',
   },
+  // Målrapport styles
+  malCountBadge: {
+    marginLeft: 8,
+    minWidth: 22,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 11,
+    backgroundColor: '#1B5E20',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  malCountText: { fontSize: 12, fontWeight: '800', color: '#fff' },
+  malEmpty: { fontSize: 13, color: '#888', fontStyle: 'italic', paddingVertical: 8, textAlign: 'center' },
+  malRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 9,
+  },
+  malRowBorder: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#e0e0e0',
+  },
+  malNrBadge: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: '#EAF3EC',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  malNrText: { fontSize: 13, fontWeight: '800', color: '#1B5E20' },
+  malInfo: { flex: 1 },
+  malTeams: { fontSize: 14, color: '#333' },
+  malScorer: { fontWeight: '800', color: '#1B5E20' },
+  malVs: { color: '#999' },
+  malScoreChange: { fontSize: 13, color: '#888', marginTop: 2 },
+  malArrow: { color: '#B8860B' },
+  malScoreNew: { fontWeight: '800', color: '#1B5E20', fontSize: 14 },
+  malTimeCol: { alignItems: 'flex-end', marginLeft: 8 },
+  malTimeLabel: { fontSize: 9, color: '#BBB', textTransform: 'uppercase' },
+  malTime: { fontSize: 14, fontWeight: '700', color: '#555' },
+
   // Grundtipsen styles
   grundtipsenRow: {
     flexDirection: 'row',
