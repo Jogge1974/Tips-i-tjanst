@@ -3641,9 +3641,9 @@ function hammingDistance(a, b) {
     return dist;
 }
 
-// Timer trigger for push notifications - runs every 5 minutes
+// Timer trigger for push notifications - runs every minute
 app.timer('pushNotificationTimer', {
-    schedule: '0 */2 * * * *',
+    schedule: '0 */1 * * * *',
     handler: async (timer, context) => {
         context.log('Push notification timer triggered');
         try {
