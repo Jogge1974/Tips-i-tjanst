@@ -752,22 +752,32 @@ export default function LiveScreen() {
                   const ta = parseInt(g.toScore.split('-')[1]) || 0;
                   const homeScored = th > fh;
                   const awayScored = ta > fa;
+                  // Aktuellt tecken efter målet, och om vi har det i vår utgångsrad (systemet)
+                  const currentSign = th > ta ? '1' : th < ta ? '2' : 'X';
+                  const covered = rows.length > 0 ? rows.some(r => (r as any)[`m${g.eventNumber}`] === currentSign) : null;
                   const time = new Date(g.detectedAtMs).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
                   return (
-                    <View key={idx} style={[styles.malRow, idx < mallista.length - 1 && styles.malRowBorder]}>
+                    <View key={idx} style={[
+                      styles.malRow,
+                      covered === true && styles.malRowGood,
+                      covered === false && styles.malRowBad,
+                    ]}>
                       <View style={styles.malNrBadge}>
                         <Text style={styles.malNrText}>{g.eventNumber}</Text>
                       </View>
                       <View style={styles.malInfo}>
-                        <Text style={styles.malTeams} numberOfLines={1}>
-                          <Text style={homeScored ? styles.malScorer : undefined}>{g.home}</Text>
-                          <Text style={styles.malVs}> – </Text>
-                          <Text style={awayScored ? styles.malScorer : undefined}>{g.away}</Text>
-                        </Text>
-                        <Text style={styles.malScoreChange}>
-                          {g.fromScore} <Text style={styles.malArrow}>→</Text> <Text style={styles.malScoreNew}>{g.toScore}</Text>
+                        <Text style={styles.malTeams} numberOfLines={1}>{g.home} – {g.away}</Text>
+                        <Text style={styles.malScoreLine}>
+                          <Text style={homeScored ? styles.malGoalDigit : styles.malPlainDigit}>{th}</Text>
+                          <Text style={styles.malPlainDigit}> – </Text>
+                          <Text style={awayScored ? styles.malGoalDigit : styles.malPlainDigit}>{ta}</Text>
                         </Text>
                       </View>
+                      {covered !== null && (
+                        <View style={[styles.malSignBadge, covered ? styles.malSignGood : styles.malSignBad]}>
+                          <Text style={[styles.malSignText, covered ? styles.malSignTextGood : styles.malSignTextBad]}>{currentSign}</Text>
+                        </View>
+                      )}
                       <View style={styles.malTimeCol}>
                         <Text style={styles.malTimeLabel}>ca</Text>
                         <Text style={styles.malTime}>{time}</Text>
@@ -1908,11 +1918,21 @@ const styles = StyleSheet.create({
   malRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 9,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    marginBottom: 5,
+    backgroundColor: '#FAFAFA',
+    borderLeftWidth: 3,
+    borderLeftColor: 'transparent',
   },
-  malRowBorder: {
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e0e0e0',
+  malRowGood: {
+    backgroundColor: '#F1FAF3',
+    borderLeftColor: '#2E7D32',
+  },
+  malRowBad: {
+    backgroundColor: '#FDF3F3',
+    borderLeftColor: '#C62828',
   },
   malNrBadge: {
     width: 26,
@@ -1926,12 +1946,24 @@ const styles = StyleSheet.create({
   malNrText: { fontSize: 13, fontWeight: '800', color: '#1B5E20' },
   malInfo: { flex: 1 },
   malTeams: { fontSize: 14, color: '#333' },
-  malScorer: { fontWeight: '800', color: '#1B5E20' },
-  malVs: { color: '#999' },
-  malScoreChange: { fontSize: 13, color: '#888', marginTop: 2 },
-  malArrow: { color: '#B8860B' },
-  malScoreNew: { fontWeight: '800', color: '#1B5E20', fontSize: 14 },
-  malTimeCol: { alignItems: 'flex-end', marginLeft: 8 },
+  malScoreLine: { fontSize: 16, marginTop: 1 },
+  malPlainDigit: { color: '#222', fontWeight: '600' },
+  malGoalDigit: { color: '#1B5E20', fontWeight: '900' },
+  malSignBadge: {
+    width: 26,
+    height: 26,
+    borderRadius: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginHorizontal: 8,
+    borderWidth: 1,
+  },
+  malSignGood: { backgroundColor: '#DCEEE1', borderColor: '#2E7D32' },
+  malSignBad: { backgroundColor: '#FBDCDC', borderColor: '#C62828' },
+  malSignText: { fontSize: 14, fontWeight: '800' },
+  malSignTextGood: { color: '#1B5E20' },
+  malSignTextBad: { color: '#C62828' },
+  malTimeCol: { alignItems: 'flex-end', width: 42 },
   malTimeLabel: { fontSize: 9, color: '#BBB', textTransform: 'uppercase' },
   malTime: { fontSize: 14, fontWeight: '700', color: '#555' },
 
