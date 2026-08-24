@@ -779,7 +779,6 @@ export default function LiveScreen() {
                         </View>
                       )}
                       <View style={styles.malTimeCol}>
-                        <Text style={styles.malTimeLabel}>ca</Text>
                         <Text style={styles.malTime}>{time}</Text>
                       </View>
                     </View>
@@ -1964,7 +1963,6 @@ const styles = StyleSheet.create({
   malSignTextGood: { color: '#1B5E20' },
   malSignTextBad: { color: '#C62828' },
   malTimeCol: { alignItems: 'flex-end', width: 42 },
-  malTimeLabel: { fontSize: 9, color: '#BBB', textTransform: 'uppercase' },
   malTime: { fontSize: 14, fontWeight: '700', color: '#555' },
 
   // Grundtipsen styles
