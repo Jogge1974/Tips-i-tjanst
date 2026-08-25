@@ -108,8 +108,10 @@ export default function LiveScreen() {
     league: string;
     eventHome: string;
     eventAway: string;
+    eventNumber: number | null;
+    startTime: string;
     loading: boolean;
-  }>({ visible: false, home: null, away: null, standings: [], league: '', eventHome: '', eventAway: '', loading: false });
+  }>({ visible: false, home: null, away: null, standings: [], league: '', eventHome: '', eventAway: '', eventNumber: null, startTime: '', loading: false });
 
   const [selectedRowIdx, setSelectedRowIdx] = useState(0);
   const [garderingTable, setGarderingTable] = useState<{ isSlutspel: number; spelomgang: string; table: { userId: number; namn: string; ratt: number | null; position: number | null }[] } | null>(null);
@@ -131,7 +133,7 @@ export default function LiveScreen() {
   const [kupongLoading, setKupongLoading] = useState(false);
 
   const openAnalysis = async (event: LiveEvent) => {
-    setAnalysisModal({ visible: true, home: null, away: null, standings: [], league: event.league || '', eventHome: event.home, eventAway: event.away, loading: true });
+    setAnalysisModal({ visible: true, home: null, away: null, standings: [], league: event.league || '', eventHome: event.home, eventAway: event.away, eventNumber: event.eventNumber, startTime: event.sportEventStart || '', loading: true });
     try {
       const resp = await fetch(`${API_BASE_URL}?action=getMatchAnalysis`, {
         method: 'POST',
@@ -999,6 +1001,55 @@ export default function LiveScreen() {
             </Text>
             <Text style={styles.analysisLeague}>{analysisModal.league}</Text>
 
+            {analysisModal.eventNumber != null && (() => {
+              const ev = draw?.events?.find(e => e.eventNumber === analysisModal.eventNumber) || null;
+              const score = ev ? getScore(ev) : '0-0';
+              const goals = mallista
+                .filter(m => m.eventNumber === analysisModal.eventNumber)
+                .sort((a, b) => a.detectedAtMs - b.detectedAtMs);
+              return (
+                <View style={styles.matchInfoBox}>
+                  <View style={styles.matchInfoRow}>
+                    <View style={styles.matchInfoNr}>
+                      <Text style={styles.matchInfoNrText}>{analysisModal.eventNumber}</Text>
+                    </View>
+                    <Text style={styles.matchInfoStart}>
+                      {analysisModal.startTime
+                        ? new Date(analysisModal.startTime).toLocaleString('sv-SE', { weekday: 'short', hour: '2-digit', minute: '2-digit' })
+                        : ''}
+                    </Text>
+                    <Text style={styles.matchInfoScore}>{score}</Text>
+                  </View>
+                  <View style={styles.matchGoalsBox}>
+                    <Text style={styles.matchGoalsTitle}>Mål</Text>
+                    {goals.length === 0 ? (
+                      <Text style={styles.matchGoalsEmpty}>Inga mål ännu</Text>
+                    ) : goals.map((g, i) => {
+                      const fh = parseInt(g.fromScore.split('-')[0]) || 0;
+                      const fa = parseInt(g.fromScore.split('-')[1]) || 0;
+                      const th = parseInt(g.toScore.split('-')[0]) || 0;
+                      const ta = parseInt(g.toScore.split('-')[1]) || 0;
+                      const homeScored = th > fh;
+                      const awayScored = ta > fa;
+                      const t = new Date(g.detectedAtMs).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+                      const scorer = homeScored ? analysisModal.eventHome : awayScored ? analysisModal.eventAway : '';
+                      return (
+                        <View key={i} style={styles.matchGoalRow}>
+                          <Text style={styles.matchGoalTime}>{t}</Text>
+                          <Text style={styles.matchGoalScore}>
+                            <Text style={homeScored ? styles.matchGoalDigit : styles.matchGoalPlain}>{th}</Text>
+                            <Text style={styles.matchGoalPlain}> – </Text>
+                            <Text style={awayScored ? styles.matchGoalDigit : styles.matchGoalPlain}>{ta}</Text>
+                          </Text>
+                          <Text style={styles.matchGoalTeam} numberOfLines={1}>{scorer}</Text>
+                        </View>
+                      );
+                    })}
+                  </View>
+                </View>
+              );
+            })()}
+
             {analysisModal.loading ? (
               <ActivityIndicator color="#1B5E20" style={{ marginVertical: 24 }} />
             ) : (
@@ -1707,6 +1758,55 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 16,
   },
+  matchInfoBox: {
+    backgroundColor: '#F1F8F2',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#DCEBDF',
+  },
+  matchInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  matchInfoNr: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#1B5E20',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  matchInfoNrText: { fontSize: 14, fontWeight: '800', color: '#fff' },
+  matchInfoStart: { flex: 1, fontSize: 13, color: '#555', textTransform: 'capitalize' },
+  matchInfoScore: { fontSize: 22, fontWeight: '900', color: '#1B5E20' },
+  matchGoalsBox: {
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#CFE2D4',
+  },
+  matchGoalsTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#1B5E20',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginBottom: 6,
+  },
+  matchGoalsEmpty: { fontSize: 13, color: '#888', fontStyle: 'italic' },
+  matchGoalRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 4,
+  },
+  matchGoalTime: { width: 48, fontSize: 13, fontWeight: '700', color: '#555' },
+  matchGoalScore: { width: 60, fontSize: 15 },
+  matchGoalDigit: { color: '#1B5E20', fontWeight: '900' },
+  matchGoalPlain: { color: '#222', fontWeight: '600' },
+  matchGoalTeam: { flex: 1, fontSize: 13, color: '#333', marginLeft: 8 },
   analysisTeams: {
     gap: 12,
     marginBottom: 20,
