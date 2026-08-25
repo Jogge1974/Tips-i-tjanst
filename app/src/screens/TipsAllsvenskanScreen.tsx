@@ -279,7 +279,7 @@ export default function TipsAllsvenskanScreen() {
                           {entry.advanced && (
                             <View style={styles.roundGardAdvance}>
                               <Ionicons
-                                name={entry.champion ? 'trophy' : 'arrow-up-circle'}
+                                name={entry.champion ? 'trophy' : 'arrow-forward-circle'}
                                 size={18}
                                 color={entry.champion ? '#B8860B' : '#1B5E20'}
                                 style={entry.champion ? undefined : { transform: [{ rotate: '-90deg' }] }}
