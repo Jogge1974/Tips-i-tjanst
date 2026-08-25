@@ -232,7 +232,7 @@ export default function MinSidaScreen() {
               <View style={styles.analysisTeams}>
                 {[analysisModal.home, analysisModal.away].map((team, i) => (
                   team ? (
-                    <View key={i} style={styles.analysisTeamCard}>
+                    <TouchableOpacity key={i} style={styles.analysisTeamCard} activeOpacity={0.7} onPress={() => openFormDetails(team)}>
                       {team.logo && <Image source={{ uri: team.logo }} style={styles.teamLogo} />}
                       <View style={styles.analysisTeamInfo}>
                         <View style={styles.analysisPositionRow}>
@@ -240,7 +240,7 @@ export default function MinSidaScreen() {
                           <Text style={styles.analysisTeamName}>{team.name}</Text>
                         </View>
                         {team.form && (
-                          <TouchableOpacity style={styles.formRow} activeOpacity={0.7} onPress={() => openFormDetails(team)}>
+                          <View style={styles.formRow}>
                             {team.form.map((m: any, fi: number) => (
                               <View key={fi} style={[
                                 styles.formBadge,
@@ -251,10 +251,11 @@ export default function MinSidaScreen() {
                                 <Text style={styles.formBadgeText}>{m.result}</Text>
                               </View>
                             ))}
-                          </TouchableOpacity>
+                          </View>
                         )}
                       </View>
-                    </View>
+                      {team.form && <Text style={styles.analysisCardChevron}>›</Text>}
+                    </TouchableOpacity>
                   ) : (
                     <View key={i} style={styles.analysisTeamCard}>
                       <Text style={styles.analysisNoData}>Tabelldata saknas</Text>
@@ -1640,6 +1641,12 @@ const styles = StyleSheet.create({
   },
   analysisTeamInfo: {
     flex: 1,
+  },
+  analysisCardChevron: {
+    fontSize: 22,
+    color: '#BBB',
+    marginLeft: 8,
+    fontWeight: '700',
   },
   analysisPositionRow: {
     flexDirection: 'row',
