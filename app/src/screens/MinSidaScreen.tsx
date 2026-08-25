@@ -76,6 +76,7 @@ export default function MinSidaScreen() {
     const home = teams[0]?.trim() || matchInfo.home || '';
     const away = teams[1]?.trim() || matchInfo.away || '';
     const league = matchInfo.liga || '';
+    setFormModal(prev => ({ ...prev, visible: false }));
     setAnalysisModal({ visible: true, home: null, away: null, standings: [], league, eventHome: home, eventAway: away, loading: true });
     try {
       const resp = await fetch(`${API_BASE_URL}?action=getMatchAnalysis`, {
@@ -216,7 +217,6 @@ export default function MinSidaScreen() {
   };
 
   const renderAnalysisModal = () => (
-    <>
     <Modal visible={analysisModal.visible} transparent animationType="slide">
       <View style={styles.analysisOverlay}>
         <ScrollView style={styles.analysisContent} contentContainerStyle={{ paddingBottom: 20 }}>
@@ -322,17 +322,14 @@ export default function MinSidaScreen() {
 
           <TouchableOpacity
             style={styles.closeAnalysisBtn}
-            onPress={() => { setAnalysisModal(prev => ({ ...prev, visible: false })); setAiAnalysis(null); setAiError(null); }}
+            onPress={() => { setAnalysisModal(prev => ({ ...prev, visible: false })); setFormModal(prev => ({ ...prev, visible: false })); setAiAnalysis(null); setAiError(null); }}
           >
             <Text style={styles.closeAnalysisBtnText}>Stäng</Text>
           </TouchableOpacity>
         </ScrollView>
-      </View>
-    </Modal>
 
-    {/* Formdetaljer - senaste 5 matcherna */}
-    <Modal visible={formModal.visible} transparent animationType="fade" onRequestClose={() => setFormModal(prev => ({ ...prev, visible: false }))}>
-      <View style={styles.formModalOverlay}>
+        {formModal.visible && (
+        <View style={styles.formModalOverlay}>
         <View style={styles.formModalCard}>
           <View style={styles.formModalHeader}>
             <Text style={styles.formModalTitle} numberOfLines={1}>{formModal.teamName}</Text>
@@ -367,9 +364,10 @@ export default function MinSidaScreen() {
             );
           })}
         </View>
+        </View>
+        )}
       </View>
     </Modal>
-    </>
   );
 
   if (isLoading) {
@@ -1686,8 +1684,9 @@ const styles = StyleSheet.create({
   },
   // Formdetaljer-popup
   formModalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.55)',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,
