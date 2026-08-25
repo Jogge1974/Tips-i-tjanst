@@ -995,7 +995,16 @@ export default function LiveScreen() {
       {/* Matchanalys-modal */}
       <Modal visible={analysisModal.visible} transparent animationType="slide">
         <View style={styles.analysisOverlay}>
-          <ScrollView style={styles.analysisContent} contentContainerStyle={{ paddingBottom: 20 }}>
+          <ScrollView style={styles.analysisContent} contentContainerStyle={{ paddingBottom: 20 }} stickyHeaderIndices={[0]}>
+            <View style={styles.analysisStickyHeader}>
+              <TouchableOpacity
+                onPress={() => setAnalysisModal(prev => ({ ...prev, visible: false }))}
+                style={styles.analysisCloseX}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <Ionicons name="close" size={24} color="#666" />
+              </TouchableOpacity>
+            </View>
             <Text style={styles.analysisTitle}>
               {analysisModal.eventHome} vs {analysisModal.eventAway}
             </Text>
@@ -1745,6 +1754,22 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 380,
     maxHeight: '90%',
+  },
+  analysisStickyHeader: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    backgroundColor: '#fff',
+    marginTop: -8,
+    marginHorizontal: -8,
+    marginBottom: 2,
+  },
+  analysisCloseX: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#F0F0F0',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   analysisTitle: {
     fontSize: 17,
