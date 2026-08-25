@@ -219,11 +219,21 @@ export default function MinSidaScreen() {
   const renderAnalysisModal = () => (
     <Modal visible={analysisModal.visible} transparent animationType="slide">
       <View style={styles.analysisOverlay}>
-        <ScrollView style={styles.analysisContent} contentContainerStyle={{ paddingBottom: 20 }}>
-          <Text style={styles.analysisTitle}>
-            {analysisModal.eventHome} vs {analysisModal.eventAway}
-          </Text>
-          <Text style={styles.analysisLeague}>{analysisModal.league}</Text>
+        <View style={styles.analysisCard}>
+          <View style={styles.analysisHeaderRow}>
+            <Text style={styles.analysisTitle} numberOfLines={1}>
+              {analysisModal.eventHome} vs {analysisModal.eventAway}
+            </Text>
+            <TouchableOpacity
+              onPress={() => { setAnalysisModal(prev => ({ ...prev, visible: false })); setFormModal(prev => ({ ...prev, visible: false })); setAiAnalysis(null); setAiError(null); }}
+              style={styles.analysisCloseX}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Text style={styles.analysisCloseXText}>✕</Text>
+            </TouchableOpacity>
+          </View>
+          <ScrollView style={styles.analysisScroll} contentContainerStyle={{ paddingBottom: 12 }}>
+            <Text style={styles.analysisLeague}>{analysisModal.league}</Text>
 
           {analysisModal.loading ? (
             <ActivityIndicator color="#1B5E20" style={{ marginVertical: 24 }} />
@@ -328,6 +338,7 @@ export default function MinSidaScreen() {
             <Text style={styles.closeAnalysisBtnText}>Stäng</Text>
           </TouchableOpacity>
         </ScrollView>
+        </View>
 
         {formModal.visible && (
         <View style={styles.formModalOverlay}>
@@ -1610,11 +1621,39 @@ const styles = StyleSheet.create({
     maxWidth: 380,
     maxHeight: '90%',
   },
+  analysisCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    paddingHorizontal: 20,
+    paddingTop: 14,
+    paddingBottom: 16,
+    width: '100%',
+    maxWidth: 380,
+    maxHeight: '90%',
+  },
+  analysisHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 6,
+  },
+  analysisScroll: {
+    flexShrink: 1,
+  },
+  analysisCloseX: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#F0F0F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  analysisCloseXText: { fontSize: 15, color: '#666', fontWeight: '700' },
   analysisTitle: {
-    fontSize: 17,
+    flex: 1,
+    fontSize: 16,
     fontWeight: '700',
     color: '#222',
-    textAlign: 'center',
   },
   analysisLeague: {
     fontSize: 12,
