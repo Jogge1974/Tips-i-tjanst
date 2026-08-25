@@ -227,6 +227,10 @@ export default function TipsAllsvenskanScreen() {
           <Text style={styles.roundsSectionTitle}>Omgångar</Text>
           {rounds.map((round) => {
             const isExpanded = !!expandedRounds[round.roundNr];
+            const slutspelIndex = rounds.filter(r => r.isSlutspel === 1 && r.roundNr <= round.roundNr).length;
+            const roundLabel = round.isSlutspel === 1
+              ? (slutspelIndex === 1 ? 'Kvartsfinal' : slutspelIndex === 2 ? 'Semifinal' : 'Final')
+              : `Omgång ${round.roundNr}`;
             return (
               <TouchableOpacity
                 key={round.roundNr}
@@ -235,7 +239,7 @@ export default function TipsAllsvenskanScreen() {
                 onPress={() => setExpandedRounds(prev => ({ ...prev, [round.roundNr]: !prev[round.roundNr] }))}
               >
                 <View style={styles.roundHeader}>
-                  <Text style={styles.roundTitle}>Omgång {round.roundNr} ({round.spelomgang})</Text>
+                  <Text style={styles.roundTitle}>{roundLabel} ({round.spelomgang})</Text>
                   <Text style={styles.roundArrow}>{isExpanded ? '▲' : '▼'}</Text>
                 </View>
                 {isExpanded && (
@@ -280,7 +284,9 @@ export default function TipsAllsvenskanScreen() {
                       );
                     })}
 
-                    {/* Grundtipsen */}
+                    {/* Grundtipsen - ointressanta i slutspel */}
+                    {round.isSlutspel !== 1 && (
+                    <>
                     <Text style={[styles.roundSubTitle, { marginTop: 16 }]}>Grundtipsen</Text>
                     {round.grundtips.map((match, idx) => (
                       <View key={match.matchNr} style={[
@@ -325,6 +331,8 @@ export default function TipsAllsvenskanScreen() {
                         </View>
                       </View>
                     ))}
+                    </>
+                    )}
                   </View>
                 )}
               </TouchableOpacity>

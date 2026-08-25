@@ -1925,33 +1925,10 @@ async function getRoundHistory() {
             };
         });
 
-        // Build gardering table
+        // Gardering/enkelrad-tabell. Enkelraden i slutspel ligger också i TIT_garderingar,
+        // så tabellen räknas identiskt oavsett omgångstyp.
         let garderingTable = [];
-        if (isSlutspel === 1) {
-            // Slutspel: each user has their own enkelrad
-            const [allTips] = await db.query(
-                'SELECT ansvarigId, matchNr, tecken FROM TIT_tipsrad WHERE spelomgang = ? ORDER BY ansvarigId, matchNr',
-                [spelomgang]
-            );
-            const tipsByUser = {};
-            for (const t of allTips) {
-                if (!tipsByUser[t.ansvarigId]) tipsByUser[t.ansvarigId] = {};
-                tipsByUser[t.ansvarigId][t.matchNr] = t.tecken;
-            }
-            for (const user of users) {
-                const userTips = tipsByUser[user.id];
-                if (!userTips) {
-                    garderingTable.push({ userId: user.id, namn: userMap[user.id], ratt: null });
-                } else {
-                    let ratt = 0;
-                    for (const k of kupongRows) {
-                        if (k.rtecken && userTips[k.matchNr] === k.rtecken) ratt++;
-                    }
-                    garderingTable.push({ userId: user.id, namn: userMap[user.id], ratt });
-                }
-            }
-        } else {
-            // Normal: garderingar
+        {
             const [allGard] = await db.query(
                 'SELECT id, matchNr, tecken FROM TIT_garderingar WHERE omgang = ? ORDER BY id, matchNr',
                 [spelomgang]
