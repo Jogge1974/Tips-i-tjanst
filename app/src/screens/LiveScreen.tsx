@@ -132,19 +132,9 @@ export default function LiveScreen() {
   } | null>(null);
   const [kupongLoading, setKupongLoading] = useState(false);
 
-  const openAnalysis = async (event: LiveEvent) => {
-    setAnalysisModal({ visible: true, home: null, away: null, standings: [], league: event.league || '', eventHome: event.home, eventAway: event.away, eventNumber: event.eventNumber, startTime: event.sportEventStart || '', loading: true });
-    try {
-      const resp = await fetch(`${API_BASE_URL}?action=getMatchAnalysis`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ league: event.league, home: event.home, away: event.away }),
-      });
-      const data = await resp.json();
-      setAnalysisModal(prev => ({ ...prev, home: data.home, away: data.away, standings: data.standings || [], loading: false }));
-    } catch {
-      setAnalysisModal(prev => ({ ...prev, loading: false }));
-    }
+  const openAnalysis = (event: LiveEvent) => {
+    // Live-vyn visar bara match-/målinfo, ingen form/tabell
+    setAnalysisModal({ visible: true, home: null, away: null, standings: [], league: event.league || '', eventHome: event.home, eventAway: event.away, eventNumber: event.eventNumber, startTime: event.sportEventStart || '', loading: false });
   };
 
   const openKupong = async () => {
@@ -1058,76 +1048,6 @@ export default function LiveScreen() {
                 </View>
               );
             })()}
-
-            {analysisModal.loading ? (
-              <ActivityIndicator color="#1B5E20" style={{ marginVertical: 24 }} />
-            ) : (
-              <>
-                <View style={styles.analysisTeams}>
-                  {[analysisModal.home, analysisModal.away].map((team, i) => (
-                    team ? (
-                      <View key={i} style={styles.analysisTeamCard}>
-                        {team.logo && <Image source={{ uri: team.logo }} style={styles.teamLogo} />}
-                        <View style={styles.analysisTeamInfo}>
-                          <View style={styles.analysisPositionRow}>
-                            <Text style={styles.analysisPosition}>#{team.position}</Text>
-                            <Text style={styles.analysisTeamName}>{team.name}</Text>
-                          </View>
-                          {team.form && (
-                            <View style={styles.formRow}>
-                              {team.form.map((m: any, fi: number) => (
-                                <View key={fi} style={[
-                                  styles.formBadge,
-                                  m.result === 'V' && styles.formWin,
-                                  m.result === 'O' && styles.formDraw,
-                                  m.result === 'F' && styles.formLoss,
-                                ]}>
-                                  <Text style={styles.formBadgeText}>{m.result}</Text>
-                                </View>
-                              ))}
-                            </View>
-                          )}
-                        </View>
-                      </View>
-                    ) : (
-                      <View key={i} style={styles.analysisTeamCard}>
-                        <Text style={styles.analysisNoData}>Tabelldata saknas</Text>
-                      </View>
-                    )
-                  ))}
-                </View>
-
-                {analysisModal.standings.length > 0 && (
-                  <View style={styles.standingsTable}>
-                    <View style={styles.standingsHeader}>
-                      <Text style={[styles.standingsCell, styles.standingsPosCol, styles.standingsHeaderText]}>#</Text>
-                      <Text style={[styles.standingsCell, styles.standingsTeamCol, styles.standingsHeaderText]}>Lag</Text>
-                      <Text style={[styles.standingsCell, styles.standingsNumCol, styles.standingsHeaderText]}>Sp</Text>
-                      <Text style={[styles.standingsCell, styles.standingsNumCol, styles.standingsHeaderText]}>V</Text>
-                      <Text style={[styles.standingsCell, styles.standingsNumCol, styles.standingsHeaderText]}>O</Text>
-                      <Text style={[styles.standingsCell, styles.standingsNumCol, styles.standingsHeaderText]}>F</Text>
-                      <Text style={[styles.standingsCell, styles.standingsGoalCol, styles.standingsHeaderText]}>Mål</Text>
-                      <Text style={[styles.standingsCell, styles.standingsNumCol, styles.standingsHeaderText]}>Po</Text>
-                    </View>
-                    {analysisModal.standings.map((t: any, idx: number) => {
-                      const isHighlighted = t.name === analysisModal.home?.name || t.name === analysisModal.away?.name;
-                      return (
-                        <View key={idx} style={[styles.standingsRow, isHighlighted && styles.standingsHighlight]}>
-                          <Text style={[styles.standingsCell, styles.standingsPosCol, isHighlighted && styles.standingsHighlightText]}>{t.position}</Text>
-                          <Text style={[styles.standingsCell, styles.standingsTeamCol, isHighlighted && styles.standingsHighlightText]} numberOfLines={1}>{t.name}</Text>
-                          <Text style={[styles.standingsCell, styles.standingsNumCol]}>{t.played}</Text>
-                          <Text style={[styles.standingsCell, styles.standingsNumCol]}>{t.wins}</Text>
-                          <Text style={[styles.standingsCell, styles.standingsNumCol]}>{t.draws}</Text>
-                          <Text style={[styles.standingsCell, styles.standingsNumCol]}>{t.losses}</Text>
-                          <Text style={[styles.standingsCell, styles.standingsGoalCol]}>{t.goalsFor}-{t.goalsAgainst}</Text>
-                          <Text style={[styles.standingsCell, styles.standingsNumCol, { fontWeight: '700' }]}>{t.points}</Text>
-                        </View>
-                      );
-                    })}
-                  </View>
-                )}
-              </>
-            )}
 
             <TouchableOpacity
               style={styles.closeAnalysisBtn}
