@@ -1759,8 +1759,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'flex-end',
     backgroundColor: '#fff',
-    marginTop: -8,
-    marginHorizontal: -8,
     marginBottom: 2,
   },
   analysisCloseX: {
