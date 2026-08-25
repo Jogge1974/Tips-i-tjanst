@@ -983,79 +983,73 @@ export default function LiveScreen() {
     </ScrollView>
 
       {/* Matchanalys-modal */}
-      <Modal visible={analysisModal.visible} transparent animationType="slide">
+      <Modal visible={analysisModal.visible} transparent animationType="fade" onRequestClose={() => setAnalysisModal(prev => ({ ...prev, visible: false }))}>
         <View style={styles.analysisOverlay}>
-          <ScrollView style={styles.analysisContent} contentContainerStyle={{ paddingBottom: 20 }} stickyHeaderIndices={[0]}>
-            <View style={styles.analysisStickyHeader}>
+          <View style={styles.analysisCard}>
+            <View style={styles.analysisHeaderRow}>
+              <Text style={styles.analysisTitle} numberOfLines={1}>
+                {analysisModal.eventHome} vs {analysisModal.eventAway}
+              </Text>
               <TouchableOpacity
                 onPress={() => setAnalysisModal(prev => ({ ...prev, visible: false }))}
                 style={styles.analysisCloseX}
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
               >
-                <Ionicons name="close" size={24} color="#666" />
+                <Ionicons name="close" size={22} color="#666" />
               </TouchableOpacity>
             </View>
-            <Text style={styles.analysisTitle}>
-              {analysisModal.eventHome} vs {analysisModal.eventAway}
-            </Text>
-            <Text style={styles.analysisLeague}>{analysisModal.league}</Text>
-
-            {analysisModal.eventNumber != null && (() => {
-              const ev = draw?.events?.find(e => e.eventNumber === analysisModal.eventNumber) || null;
-              const score = ev ? getScore(ev) : '0-0';
-              const goals = mallista
-                .filter(m => m.eventNumber === analysisModal.eventNumber)
-                .sort((a, b) => a.detectedAtMs - b.detectedAtMs);
-              return (
-                <View style={styles.matchInfoBox}>
-                  <View style={styles.matchInfoRow}>
-                    <View style={styles.matchInfoNr}>
-                      <Text style={styles.matchInfoNrText}>{analysisModal.eventNumber}</Text>
+            {!!analysisModal.league && <Text style={styles.analysisLeague}>{analysisModal.league}</Text>}
+            <ScrollView style={styles.analysisScroll} contentContainerStyle={{ paddingBottom: 4 }}>
+              {analysisModal.eventNumber != null && (() => {
+                const ev = draw?.events?.find(e => e.eventNumber === analysisModal.eventNumber) || null;
+                const score = ev ? getScore(ev) : '0-0';
+                const goals = mallista
+                  .filter(m => m.eventNumber === analysisModal.eventNumber)
+                  .sort((a, b) => a.detectedAtMs - b.detectedAtMs);
+                return (
+                  <View style={styles.matchInfoBox}>
+                    <View style={styles.matchInfoRow}>
+                      <View style={styles.matchInfoNr}>
+                        <Text style={styles.matchInfoNrText}>{analysisModal.eventNumber}</Text>
+                      </View>
+                      <Text style={styles.matchInfoStart}>
+                        {analysisModal.startTime
+                          ? new Date(analysisModal.startTime).toLocaleString('sv-SE', { weekday: 'short', hour: '2-digit', minute: '2-digit' })
+                          : ''}
+                      </Text>
+                      <Text style={styles.matchInfoScore}>{score}</Text>
                     </View>
-                    <Text style={styles.matchInfoStart}>
-                      {analysisModal.startTime
-                        ? new Date(analysisModal.startTime).toLocaleString('sv-SE', { weekday: 'short', hour: '2-digit', minute: '2-digit' })
-                        : ''}
-                    </Text>
-                    <Text style={styles.matchInfoScore}>{score}</Text>
+                    <View style={styles.matchGoalsBox}>
+                      <Text style={styles.matchGoalsTitle}>Mål</Text>
+                      {goals.length === 0 ? (
+                        <Text style={styles.matchGoalsEmpty}>Inga mål ännu</Text>
+                      ) : goals.map((g, i) => {
+                        const fh = parseInt(g.fromScore.split('-')[0]) || 0;
+                        const fa = parseInt(g.fromScore.split('-')[1]) || 0;
+                        const th = parseInt(g.toScore.split('-')[0]) || 0;
+                        const ta = parseInt(g.toScore.split('-')[1]) || 0;
+                        const homeScored = th > fh;
+                        const awayScored = ta > fa;
+                        const t = new Date(g.detectedAtMs).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+                        const scorer = homeScored ? analysisModal.eventHome : awayScored ? analysisModal.eventAway : '';
+                        return (
+                          <View key={i} style={styles.matchGoalRow}>
+                            <Text style={styles.matchGoalTime}>{t}</Text>
+                            <Text style={styles.matchGoalScore}>
+                              <Text style={homeScored ? styles.matchGoalDigit : styles.matchGoalPlain}>{th}</Text>
+                              <Text style={styles.matchGoalPlain}> – </Text>
+                              <Text style={awayScored ? styles.matchGoalDigit : styles.matchGoalPlain}>{ta}</Text>
+                            </Text>
+                            <Text style={styles.matchGoalTeam} numberOfLines={1}>{scorer}</Text>
+                          </View>
+                        );
+                      })}
+                    </View>
                   </View>
-                  <View style={styles.matchGoalsBox}>
-                    <Text style={styles.matchGoalsTitle}>Mål</Text>
-                    {goals.length === 0 ? (
-                      <Text style={styles.matchGoalsEmpty}>Inga mål ännu</Text>
-                    ) : goals.map((g, i) => {
-                      const fh = parseInt(g.fromScore.split('-')[0]) || 0;
-                      const fa = parseInt(g.fromScore.split('-')[1]) || 0;
-                      const th = parseInt(g.toScore.split('-')[0]) || 0;
-                      const ta = parseInt(g.toScore.split('-')[1]) || 0;
-                      const homeScored = th > fh;
-                      const awayScored = ta > fa;
-                      const t = new Date(g.detectedAtMs).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
-                      const scorer = homeScored ? analysisModal.eventHome : awayScored ? analysisModal.eventAway : '';
-                      return (
-                        <View key={i} style={styles.matchGoalRow}>
-                          <Text style={styles.matchGoalTime}>{t}</Text>
-                          <Text style={styles.matchGoalScore}>
-                            <Text style={homeScored ? styles.matchGoalDigit : styles.matchGoalPlain}>{th}</Text>
-                            <Text style={styles.matchGoalPlain}> – </Text>
-                            <Text style={awayScored ? styles.matchGoalDigit : styles.matchGoalPlain}>{ta}</Text>
-                          </Text>
-                          <Text style={styles.matchGoalTeam} numberOfLines={1}>{scorer}</Text>
-                        </View>
-                      );
-                    })}
-                  </View>
-                </View>
-              );
-            })()}
-
-            <TouchableOpacity
-              style={styles.closeAnalysisBtn}
-              onPress={() => setAnalysisModal(prev => ({ ...prev, visible: false }))}
-            >
-              <Text style={styles.closeAnalysisBtnText}>Stäng</Text>
-            </TouchableOpacity>
-          </ScrollView>
+                );
+              })()}
+            </ScrollView>
+          </View>
         </View>
       </Modal>
 
@@ -1675,6 +1669,24 @@ const styles = StyleSheet.create({
     maxWidth: 380,
     maxHeight: '90%',
   },
+  analysisCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    paddingHorizontal: 20,
+    paddingTop: 14,
+    paddingBottom: 16,
+    width: '100%',
+    maxWidth: 380,
+    maxHeight: '85%',
+  },
+  analysisHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  analysisScroll: {
+    flexShrink: 1,
+  },
   analysisStickyHeader: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
@@ -1690,16 +1702,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   analysisTitle: {
-    fontSize: 17,
+    flex: 1,
+    fontSize: 16,
     fontWeight: '700',
     color: '#222',
-    textAlign: 'center',
   },
   analysisLeague: {
     fontSize: 12,
     color: '#999',
-    textAlign: 'center',
-    marginBottom: 16,
+    marginTop: 2,
+    marginBottom: 12,
   },
   matchInfoBox: {
     backgroundColor: '#F1F8F2',
