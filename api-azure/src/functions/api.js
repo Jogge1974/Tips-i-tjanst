@@ -20,7 +20,7 @@ const SVENSKA_SPEL_KEY = '45c5fc62-8386-4e59-b8ab-06b7f10f505d';
 
 // Google Gemini API
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent';
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent';
 
 let pool = null;
 
@@ -952,6 +952,7 @@ const THESPORTSDB_MAP = {
 };
 
 const standingsCache = {};
+const aiCache = {}; // key -> { text, time } (per warm instance, TTL nedan)
 
 async function getMatchAnalysis(query) {
     const { league, home, away } = query;
@@ -999,40 +1000,49 @@ async function getMatchAnalysis(query) {
 }
 
 async function getTeamForm(teamId, espnLeague) {
-    try {
-        const url = `https://site.api.espn.com/apis/site/v2/sports/soccer/${espnLeague}/teams/${teamId}/schedule?season=2025`;
-        const resp = await fetch(url);
-        if (!resp.ok) return null;
-        const data = await resp.json();
-        if (!data.events) return null;
+    // ESPN soccer-säsong = startår (t.ex. 2026-27-säsongen = "2026").
+    const now = new Date();
+    const currentSeason = (now.getMonth() + 1) >= 7 ? now.getFullYear() : now.getFullYear() - 1;
 
-        // Get last 5 completed matches (ESPN returns newest first)
-        const completed = data.events.filter(e =>
-            e.competitions && e.competitions[0] && e.competitions[0].status &&
-            e.competitions[0].status.type && e.competitions[0].status.type.completed
-        );
-        const last5 = completed.slice(0, 5);
+    const fetchCompleted = async (season) => {
+        try {
+            const url = `https://site.api.espn.com/apis/site/v2/sports/soccer/${espnLeague}/teams/${teamId}/schedule?season=${season}`;
+            const resp = await fetch(url);
+            if (!resp.ok) return [];
+            const data = await resp.json();
+            if (!data.events) return [];
+            // Avslutade matcher, ESPN returnerar nyast först
+            return data.events.filter(e =>
+                e.competitions && e.competitions[0] && e.competitions[0].status &&
+                e.competitions[0].status.type && e.competitions[0].status.type.completed
+            );
+        } catch { return []; }
+    };
 
-        return last5.map(e => {
-            const comp = e.competitions[0];
-            const homeTeam = comp.competitors.find(c => c.homeAway === 'home');
-            const awayTeam = comp.competitors.find(c => c.homeAway === 'away');
-            const isHome = homeTeam && homeTeam.id === String(teamId);
-            const myScore = isHome ? parseInt(homeTeam.score.displayValue) : parseInt(awayTeam.score.displayValue);
-            const oppScore = isHome ? parseInt(awayTeam.score.displayValue) : parseInt(homeTeam.score.displayValue);
-            let result = 'O';
-            if (myScore > oppScore) result = 'V';
-            else if (myScore < oppScore) result = 'F';
-            return {
-                result,
-                score: `${homeTeam.score.displayValue}-${awayTeam.score.displayValue}`,
-                opponent: isHome ? (awayTeam.team.shortDisplayName || awayTeam.team.abbreviation) : (homeTeam.team.shortDisplayName || homeTeam.team.abbreviation),
-                isHome,
-            };
-        });
-    } catch {
-        return null;
+    // Innevarande säsong; tidigt på säsongen fylls listan på med förra säsongens senaste
+    let completed = await fetchCompleted(currentSeason);
+    if (completed.length < 5) {
+        completed = completed.concat(await fetchCompleted(currentSeason - 1));
     }
+    const last5 = completed.slice(0, 5);
+
+    return last5.map(e => {
+        const comp = e.competitions[0];
+        const homeTeam = comp.competitors.find(c => c.homeAway === 'home');
+        const awayTeam = comp.competitors.find(c => c.homeAway === 'away');
+        const isHome = homeTeam && homeTeam.id === String(teamId);
+        const myScore = isHome ? parseInt(homeTeam.score.displayValue) : parseInt(awayTeam.score.displayValue);
+        const oppScore = isHome ? parseInt(awayTeam.score.displayValue) : parseInt(homeTeam.score.displayValue);
+        let result = 'O';
+        if (myScore > oppScore) result = 'V';
+        else if (myScore < oppScore) result = 'F';
+        return {
+            result,
+            score: `${homeTeam.score.displayValue}-${awayTeam.score.displayValue}`,
+            opponent: isHome ? (awayTeam.team.shortDisplayName || awayTeam.team.abbreviation) : (homeTeam.team.shortDisplayName || homeTeam.team.abbreviation),
+            isHome,
+        };
+    });
 }
 
 // TheSportsDB fallback for leagues ESPN doesn't cover
@@ -2795,9 +2805,19 @@ app.http('api', {
                     const hemmalag = params.hemmalag;
                     const bortalag = params.bortalag;
                     const serie = params.serie || 'okänd serie';
+                    const matchdata = params.matchdata || '';
                     if (!hemmalag || !bortalag) return jsonResponse({ error: 'hemmalag and bortalag required' }, 400);
 
-                    const prompt = `Du är en fotbollsexpert. Analysera matchen ${hemmalag} vs ${bortalag} i ${serie}. Ge en kort analys (max 150 ord) på svenska om lagets form, styrkor/svagheter och troligt utfall (1/X/2). Avsluta med din rekommendation.`;
+                    // Cache per match (~30 min) så upprepade öppningar blir omedelbara
+                    const cacheKey = `${hemmalag}|${bortalag}|${serie}|${matchdata ? '1' : '0'}`;
+                    const cached = aiCache[cacheKey];
+                    if (cached && (Date.now() - cached.time) < 30 * 60 * 1000) {
+                        return jsonResponse({ analysis: cached.text, hemmalag, bortalag, serie, cached: true });
+                    }
+
+                    const prompt = matchdata
+                        ? `Du är en fotbollsexpert. Analysera matchen ${hemmalag} vs ${bortalag} i ${serie} utifrån AKTUELL data nedan.\n\n${matchdata}\n\nGe en kort analys (max 120 ord) på svenska om lagens form, styrkor/svagheter och troligt utfall (1/X/2). Grunda analysen på datan ovan. Avsluta med din rekommendation.`
+                        : `Du är en fotbollsexpert. Analysera matchen ${hemmalag} vs ${bortalag} i ${serie}. Ge en kort analys (max 150 ord) på svenska om lagets form, styrkor/svagheter och troligt utfall (1/X/2). Avsluta med din rekommendation.`;
 
                     try {
                         const geminiResp = await fetch(GEMINI_URL, {
@@ -2805,7 +2825,7 @@ app.http('api', {
                             headers: { 'Content-Type': 'application/json', 'X-goog-api-key': GEMINI_API_KEY },
                             body: JSON.stringify({
                                 contents: [{ parts: [{ text: prompt }] }],
-                                generationConfig: { temperature: 0.7 }
+                                generationConfig: { temperature: 0.7, maxOutputTokens: 320 }
                             })
                         });
 
@@ -2822,6 +2842,7 @@ app.http('api', {
                         const candidate = geminiData?.candidates?.[0];
                         const text = candidate?.content?.parts?.[0]?.text || 'Inget svar från AI.';
                         const finishReason = candidate?.finishReason || 'unknown';
+                        if (text && text !== 'Inget svar från AI.') aiCache[cacheKey] = { text, time: Date.now() };
                         return jsonResponse({ analysis: text, hemmalag, bortalag, serie, finishReason });
                     } catch (err) {
                         return jsonResponse({ error: 'AI request failed', message: err.message }, 500);

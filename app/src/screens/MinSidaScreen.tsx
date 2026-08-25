@@ -46,7 +46,12 @@ export default function MinSidaScreen() {
     setAiError(null);
     setAiLoading(true);
     try {
-      const result = await api.analyzeMatch(home, away, league);
+      // Skicka med aktuell tabell-/formdata så AI:n grundar analysen på dagsfärska siffror
+      const fmtTeam = (t: any) => t
+        ? `${t.name}: tabellplats ${t.position ?? '?'}, ${t.played ?? 0} spelade (${t.wins ?? 0}V ${t.draws ?? 0}O ${t.losses ?? 0}F), mål ${t.goalsFor ?? 0}-${t.goalsAgainst ?? 0}, ${t.points ?? 0}p. Senaste matcher (nyast först): ${(t.form || []).map((f: any) => `${f.result} ${f.score} mot ${f.opponent}`).join(', ') || 'saknas'}`
+        : '';
+      const matchdata = [fmtTeam(analysisModal.home), fmtTeam(analysisModal.away)].filter(Boolean).join('\n');
+      const result = await api.analyzeMatch(home, away, league, matchdata || undefined);
       if (result.error === 'rate_limit') {
         setAiError(result.message || 'Försök igen om 1 minut.');
       } else if (result.error) {
