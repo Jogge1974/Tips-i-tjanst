@@ -1041,6 +1041,7 @@ async function getTeamForm(teamId, espnLeague) {
             score: `${homeTeam.score.displayValue}-${awayTeam.score.displayValue}`,
             opponent: isHome ? (awayTeam.team.shortDisplayName || awayTeam.team.abbreviation) : (homeTeam.team.shortDisplayName || homeTeam.team.abbreviation),
             isHome,
+            date: e.date || '',
         };
     });
 }

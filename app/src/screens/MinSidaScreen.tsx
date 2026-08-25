@@ -40,6 +40,12 @@ export default function MinSidaScreen() {
   const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
+  const [formModal, setFormModal] = useState<{ visible: boolean; teamName: string; matches: any[] }>({ visible: false, teamName: '', matches: [] });
+
+  const openFormDetails = (team: any) => {
+    if (!team?.form) return;
+    setFormModal({ visible: true, teamName: team.name || '', matches: team.form });
+  };
 
   const fetchAiAnalysis = async (home: string, away: string, league: string) => {
     setAiAnalysis(null);
@@ -210,6 +216,7 @@ export default function MinSidaScreen() {
   };
 
   const renderAnalysisModal = () => (
+    <>
     <Modal visible={analysisModal.visible} transparent animationType="slide">
       <View style={styles.analysisOverlay}>
         <ScrollView style={styles.analysisContent} contentContainerStyle={{ paddingBottom: 20 }}>
@@ -233,7 +240,7 @@ export default function MinSidaScreen() {
                           <Text style={styles.analysisTeamName}>{team.name}</Text>
                         </View>
                         {team.form && (
-                          <View style={styles.formRow}>
+                          <TouchableOpacity style={styles.formRow} activeOpacity={0.7} onPress={() => openFormDetails(team)}>
                             {team.form.map((m: any, fi: number) => (
                               <View key={fi} style={[
                                 styles.formBadge,
@@ -244,7 +251,7 @@ export default function MinSidaScreen() {
                                 <Text style={styles.formBadgeText}>{m.result}</Text>
                               </View>
                             ))}
-                          </View>
+                          </TouchableOpacity>
                         )}
                       </View>
                     </View>
@@ -322,6 +329,47 @@ export default function MinSidaScreen() {
         </ScrollView>
       </View>
     </Modal>
+
+    {/* Formdetaljer - senaste 5 matcherna */}
+    <Modal visible={formModal.visible} transparent animationType="fade" onRequestClose={() => setFormModal(prev => ({ ...prev, visible: false }))}>
+      <View style={styles.formModalOverlay}>
+        <View style={styles.formModalCard}>
+          <View style={styles.formModalHeader}>
+            <Text style={styles.formModalTitle} numberOfLines={1}>{formModal.teamName}</Text>
+            <TouchableOpacity
+              onPress={() => setFormModal(prev => ({ ...prev, visible: false }))}
+              style={styles.formModalClose}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Text style={styles.formModalCloseText}>✕</Text>
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.formModalSub}>Senaste {formModal.matches.length} matcherna (nyast först)</Text>
+          {formModal.matches.map((m: any, i: number) => {
+            const dateStr = m.date ? new Date(m.date).toLocaleDateString('sv-SE', { day: 'numeric', month: 'short' }) : '';
+            return (
+              <View key={i} style={styles.formDetailRow}>
+                <Text style={styles.formDetailDate}>{dateStr}</Text>
+                <View style={[styles.formDetailHA, m.isHome ? styles.formDetailHome : styles.formDetailAway]}>
+                  <Text style={styles.formDetailHAText}>{m.isHome ? 'H' : 'B'}</Text>
+                </View>
+                <Text style={styles.formDetailOpp} numberOfLines={1}>{m.opponent}</Text>
+                <Text style={styles.formDetailScore}>{m.score}</Text>
+                <View style={[
+                  styles.formDetailBadge,
+                  m.result === 'V' && styles.formWin,
+                  m.result === 'O' && styles.formDraw,
+                  m.result === 'F' && styles.formLoss,
+                ]}>
+                  <Text style={styles.formBadgeText}>{m.result}</Text>
+                </View>
+              </View>
+            );
+          })}
+        </View>
+      </View>
+    </Modal>
+    </>
   );
 
   if (isLoading) {
@@ -408,120 +456,7 @@ export default function MinSidaScreen() {
           </View>
         </View>
 
-        {/* Matchanalys-modal */}
-        <Modal visible={analysisModal.visible} transparent animationType="slide">
-          <View style={styles.analysisOverlay}>
-            <ScrollView style={styles.analysisContent} contentContainerStyle={{ paddingBottom: 20 }}>
-              <Text style={styles.analysisTitle}>
-                {analysisModal.eventHome} vs {analysisModal.eventAway}
-              </Text>
-              <Text style={styles.analysisLeague}>{analysisModal.league}</Text>
-
-              {analysisModal.loading ? (
-                <ActivityIndicator color="#1B5E20" style={{ marginVertical: 24 }} />
-              ) : (
-                <>
-                  <View style={styles.analysisTeams}>
-                    {[analysisModal.home, analysisModal.away].map((team, i) => (
-                      team ? (
-                        <View key={i} style={styles.analysisTeamCard}>
-                          {team.logo && <Image source={{ uri: team.logo }} style={styles.teamLogo} />}
-                          <View style={styles.analysisTeamInfo}>
-                            <View style={styles.analysisPositionRow}>
-                              <Text style={styles.analysisPosition}>#{team.position}</Text>
-                              <Text style={styles.analysisTeamName}>{team.name}</Text>
-                            </View>
-                            {team.form && (
-                              <View style={styles.formRow}>
-                                {team.form.map((m: any, fi: number) => (
-                                  <View key={fi} style={[
-                                    styles.formBadge,
-                                    m.result === 'V' && styles.formWin,
-                                    m.result === 'O' && styles.formDraw,
-                                    m.result === 'F' && styles.formLoss,
-                                  ]}>
-                                    <Text style={styles.formBadgeText}>{m.result}</Text>
-                                  </View>
-                                ))}
-                              </View>
-                            )}
-                          </View>
-                        </View>
-                      ) : (
-                        <View key={i} style={styles.analysisTeamCard}>
-                          <Text style={styles.analysisNoData}>Tabelldata saknas</Text>
-                        </View>
-                      )
-                    ))}
-                  </View>
-
-                  {analysisModal.standings.length > 0 && (
-                    <View style={styles.standingsTable}>
-                      <View style={styles.standingsHeader}>
-                        <Text style={[styles.standingsCell, styles.standingsPosCol, styles.standingsHeaderText]}>#</Text>
-                        <Text style={[styles.standingsCell, styles.standingsTeamCol, styles.standingsHeaderText]}>Lag</Text>
-                        <Text style={[styles.standingsCell, styles.standingsNumCol, styles.standingsHeaderText]}>Sp</Text>
-                        <Text style={[styles.standingsCell, styles.standingsNumCol, styles.standingsHeaderText]}>V</Text>
-                        <Text style={[styles.standingsCell, styles.standingsNumCol, styles.standingsHeaderText]}>O</Text>
-                        <Text style={[styles.standingsCell, styles.standingsNumCol, styles.standingsHeaderText]}>F</Text>
-                        <Text style={[styles.standingsCell, styles.standingsGoalCol, styles.standingsHeaderText]}>Mål</Text>
-                        <Text style={[styles.standingsCell, styles.standingsNumCol, styles.standingsHeaderText]}>Po</Text>
-                      </View>
-                      {analysisModal.standings.map((t: any, idx: number) => {
-                        const isHighlighted = t.name === analysisModal.home?.name || t.name === analysisModal.away?.name;
-                        return (
-                          <View key={idx} style={[styles.standingsRow, isHighlighted && styles.standingsHighlight]}>
-                            <Text style={[styles.standingsCell, styles.standingsPosCol, isHighlighted && styles.standingsHighlightText]}>{t.position}</Text>
-                            <Text style={[styles.standingsCell, styles.standingsTeamCol, isHighlighted && styles.standingsHighlightText]} numberOfLines={1}>{t.name}</Text>
-                            <Text style={[styles.standingsCell, styles.standingsNumCol]}>{t.played}</Text>
-                            <Text style={[styles.standingsCell, styles.standingsNumCol]}>{t.wins}</Text>
-                            <Text style={[styles.standingsCell, styles.standingsNumCol]}>{t.draws}</Text>
-                            <Text style={[styles.standingsCell, styles.standingsNumCol]}>{t.losses}</Text>
-                            <Text style={[styles.standingsCell, styles.standingsGoalCol]}>{t.goalsFor}-{t.goalsAgainst}</Text>
-                            <Text style={[styles.standingsCell, styles.standingsNumCol, { fontWeight: '700' }]}>{t.points}</Text>
-                          </View>
-                        );
-                      })}
-                    </View>
-                  )}
-                </>
-              )}
-
-              {/* AI-analys */}
-              {!analysisModal.loading && (
-                <View style={styles.aiSection}>
-                  {!aiAnalysis && !aiLoading && !aiError && (
-                    <TouchableOpacity
-                      style={styles.aiBtn}
-                      onPress={() => fetchAiAnalysis(analysisModal.eventHome, analysisModal.eventAway, analysisModal.league)}
-                    >
-                      <Text style={styles.aiBtnText}>🤖 AI-analys av matchen</Text>
-                    </TouchableOpacity>
-                  )}
-                  {aiLoading && <ActivityIndicator color="#6A1B9A" style={{ marginVertical: 12 }} />}
-                  {aiError && (
-                    <View style={styles.aiErrorBox}>
-                      <Text style={styles.aiErrorText}>{aiError}</Text>
-                    </View>
-                  )}
-                  {aiAnalysis && (
-                    <View style={styles.aiResultBox}>
-                      <Text style={styles.aiResultLabel}>🤖 AI-analys</Text>
-                      <Text style={styles.aiResultText}>{aiAnalysis}</Text>
-                    </View>
-                  )}
-                </View>
-              )}
-
-              <TouchableOpacity
-                style={styles.closeAnalysisBtn}
-                onPress={() => { setAnalysisModal(prev => ({ ...prev, visible: false })); setAiAnalysis(null); setAiError(null); }}
-              >
-                <Text style={styles.closeAnalysisBtnText}>Stäng</Text>
-              </TouchableOpacity>
-            </ScrollView>
-          </View>
-        </Modal>
+        {renderAnalysisModal()}
       </View>
     );
   }
@@ -685,120 +620,7 @@ export default function MinSidaScreen() {
           </View>
         )}
 
-        {/* Matchanalys-modal */}
-        <Modal visible={analysisModal.visible} transparent animationType="slide">
-          <View style={styles.analysisOverlay}>
-            <ScrollView style={styles.analysisContent} contentContainerStyle={{ paddingBottom: 20 }}>
-              <Text style={styles.analysisTitle}>
-                {analysisModal.eventHome} vs {analysisModal.eventAway}
-              </Text>
-              <Text style={styles.analysisLeague}>{analysisModal.league}</Text>
-
-              {analysisModal.loading ? (
-                <ActivityIndicator color="#1B5E20" style={{ marginVertical: 24 }} />
-              ) : (
-                <>
-                  <View style={styles.analysisTeams}>
-                    {[analysisModal.home, analysisModal.away].map((team, i) => (
-                      team ? (
-                        <View key={i} style={styles.analysisTeamCard}>
-                          {team.logo && <Image source={{ uri: team.logo }} style={styles.teamLogo} />}
-                          <View style={styles.analysisTeamInfo}>
-                            <View style={styles.analysisPositionRow}>
-                              <Text style={styles.analysisPosition}>#{team.position}</Text>
-                              <Text style={styles.analysisTeamName}>{team.name}</Text>
-                            </View>
-                            {team.form && (
-                              <View style={styles.formRow}>
-                                {team.form.map((m: any, fi: number) => (
-                                  <View key={fi} style={[
-                                    styles.formBadge,
-                                    m.result === 'V' && styles.formWin,
-                                    m.result === 'O' && styles.formDraw,
-                                    m.result === 'F' && styles.formLoss,
-                                  ]}>
-                                    <Text style={styles.formBadgeText}>{m.result}</Text>
-                                  </View>
-                                ))}
-                              </View>
-                            )}
-                          </View>
-                        </View>
-                      ) : (
-                        <View key={i} style={styles.analysisTeamCard}>
-                          <Text style={styles.analysisNoData}>Tabelldata saknas</Text>
-                        </View>
-                      )
-                    ))}
-                  </View>
-
-                  {analysisModal.standings.length > 0 && (
-                    <View style={styles.standingsTable}>
-                      <View style={styles.standingsHeader}>
-                        <Text style={[styles.standingsCell, styles.standingsPosCol, styles.standingsHeaderText]}>#</Text>
-                        <Text style={[styles.standingsCell, styles.standingsTeamCol, styles.standingsHeaderText]}>Lag</Text>
-                        <Text style={[styles.standingsCell, styles.standingsNumCol, styles.standingsHeaderText]}>Sp</Text>
-                        <Text style={[styles.standingsCell, styles.standingsNumCol, styles.standingsHeaderText]}>V</Text>
-                        <Text style={[styles.standingsCell, styles.standingsNumCol, styles.standingsHeaderText]}>O</Text>
-                        <Text style={[styles.standingsCell, styles.standingsNumCol, styles.standingsHeaderText]}>F</Text>
-                        <Text style={[styles.standingsCell, styles.standingsGoalCol, styles.standingsHeaderText]}>Mål</Text>
-                        <Text style={[styles.standingsCell, styles.standingsNumCol, styles.standingsHeaderText]}>Po</Text>
-                      </View>
-                      {analysisModal.standings.map((t: any, idx: number) => {
-                        const isHighlighted = t.name === analysisModal.home?.name || t.name === analysisModal.away?.name;
-                        return (
-                          <View key={idx} style={[styles.standingsRow, isHighlighted && styles.standingsHighlight]}>
-                            <Text style={[styles.standingsCell, styles.standingsPosCol, isHighlighted && styles.standingsHighlightText]}>{t.position}</Text>
-                            <Text style={[styles.standingsCell, styles.standingsTeamCol, isHighlighted && styles.standingsHighlightText]} numberOfLines={1}>{t.name}</Text>
-                            <Text style={[styles.standingsCell, styles.standingsNumCol]}>{t.played}</Text>
-                            <Text style={[styles.standingsCell, styles.standingsNumCol]}>{t.wins}</Text>
-                            <Text style={[styles.standingsCell, styles.standingsNumCol]}>{t.draws}</Text>
-                            <Text style={[styles.standingsCell, styles.standingsNumCol]}>{t.losses}</Text>
-                            <Text style={[styles.standingsCell, styles.standingsGoalCol]}>{t.goalsFor}-{t.goalsAgainst}</Text>
-                            <Text style={[styles.standingsCell, styles.standingsNumCol, { fontWeight: '700' }]}>{t.points}</Text>
-                          </View>
-                        );
-                      })}
-                    </View>
-                  )}
-                </>
-              )}
-
-              {/* AI-analys */}
-              {!analysisModal.loading && (
-                <View style={styles.aiSection}>
-                  {!aiAnalysis && !aiLoading && !aiError && (
-                    <TouchableOpacity
-                      style={styles.aiBtn}
-                      onPress={() => fetchAiAnalysis(analysisModal.eventHome, analysisModal.eventAway, analysisModal.league)}
-                    >
-                      <Text style={styles.aiBtnText}>🤖 AI-analys av matchen</Text>
-                    </TouchableOpacity>
-                  )}
-                  {aiLoading && <ActivityIndicator color="#6A1B9A" style={{ marginVertical: 12 }} />}
-                  {aiError && (
-                    <View style={styles.aiErrorBox}>
-                      <Text style={styles.aiErrorText}>{aiError}</Text>
-                    </View>
-                  )}
-                  {aiAnalysis && (
-                    <View style={styles.aiResultBox}>
-                      <Text style={styles.aiResultLabel}>🤖 AI-analys</Text>
-                      <Text style={styles.aiResultText}>{aiAnalysis}</Text>
-                    </View>
-                  )}
-                </View>
-              )}
-
-              <TouchableOpacity
-                style={styles.closeAnalysisBtn}
-                onPress={() => { setAnalysisModal(prev => ({ ...prev, visible: false })); setAiAnalysis(null); setAiError(null); }}
-              >
-                <Text style={styles.closeAnalysisBtnText}>Stäng</Text>
-              </TouchableOpacity>
-            </ScrollView>
-          </View>
-        </Modal>
+        {renderAnalysisModal()}
 
         <Animated.View style={[styles.toast, { opacity: toastOpacity }]} pointerEvents="none">
           <Text style={styles.toastText}>{toastMessage}</Text>
@@ -941,120 +763,7 @@ export default function MinSidaScreen() {
         </Text>
       </TouchableOpacity>
 
-      {/* Matchanalys-modal */}
-      <Modal visible={analysisModal.visible} transparent animationType="slide">
-        <View style={styles.analysisOverlay}>
-          <ScrollView style={styles.analysisContent} contentContainerStyle={{ paddingBottom: 20 }}>
-            <Text style={styles.analysisTitle}>
-              {analysisModal.eventHome} vs {analysisModal.eventAway}
-            </Text>
-            <Text style={styles.analysisLeague}>{analysisModal.league}</Text>
-
-            {analysisModal.loading ? (
-              <ActivityIndicator color="#1B5E20" style={{ marginVertical: 24 }} />
-            ) : (
-              <>
-                <View style={styles.analysisTeams}>
-                  {[analysisModal.home, analysisModal.away].map((team, i) => (
-                    team ? (
-                      <View key={i} style={styles.analysisTeamCard}>
-                        {team.logo && <Image source={{ uri: team.logo }} style={styles.teamLogo} />}
-                        <View style={styles.analysisTeamInfo}>
-                          <View style={styles.analysisPositionRow}>
-                            <Text style={styles.analysisPosition}>#{team.position}</Text>
-                            <Text style={styles.analysisTeamName}>{team.name}</Text>
-                          </View>
-                          {team.form && (
-                            <View style={styles.formRow}>
-                              {team.form.map((m: any, fi: number) => (
-                                <View key={fi} style={[
-                                  styles.formBadge,
-                                  m.result === 'V' && styles.formWin,
-                                  m.result === 'O' && styles.formDraw,
-                                  m.result === 'F' && styles.formLoss,
-                                ]}>
-                                  <Text style={styles.formBadgeText}>{m.result}</Text>
-                                </View>
-                              ))}
-                            </View>
-                          )}
-                        </View>
-                      </View>
-                    ) : (
-                      <View key={i} style={styles.analysisTeamCard}>
-                        <Text style={styles.analysisNoData}>Tabelldata saknas</Text>
-                      </View>
-                    )
-                  ))}
-                </View>
-
-                {analysisModal.standings.length > 0 && (
-                  <View style={styles.standingsTable}>
-                    <View style={styles.standingsHeader}>
-                      <Text style={[styles.standingsCell, styles.standingsPosCol, styles.standingsHeaderText]}>#</Text>
-                      <Text style={[styles.standingsCell, styles.standingsTeamCol, styles.standingsHeaderText]}>Lag</Text>
-                      <Text style={[styles.standingsCell, styles.standingsNumCol, styles.standingsHeaderText]}>Sp</Text>
-                      <Text style={[styles.standingsCell, styles.standingsNumCol, styles.standingsHeaderText]}>V</Text>
-                      <Text style={[styles.standingsCell, styles.standingsNumCol, styles.standingsHeaderText]}>O</Text>
-                      <Text style={[styles.standingsCell, styles.standingsNumCol, styles.standingsHeaderText]}>F</Text>
-                      <Text style={[styles.standingsCell, styles.standingsGoalCol, styles.standingsHeaderText]}>Mål</Text>
-                      <Text style={[styles.standingsCell, styles.standingsNumCol, styles.standingsHeaderText]}>Po</Text>
-                    </View>
-                    {analysisModal.standings.map((t: any, idx: number) => {
-                      const isHighlighted = t.name === analysisModal.home?.name || t.name === analysisModal.away?.name;
-                      return (
-                        <View key={idx} style={[styles.standingsRow, isHighlighted && styles.standingsHighlight]}>
-                          <Text style={[styles.standingsCell, styles.standingsPosCol, isHighlighted && styles.standingsHighlightText]}>{t.position}</Text>
-                          <Text style={[styles.standingsCell, styles.standingsTeamCol, isHighlighted && styles.standingsHighlightText]} numberOfLines={1}>{t.name}</Text>
-                          <Text style={[styles.standingsCell, styles.standingsNumCol]}>{t.played}</Text>
-                          <Text style={[styles.standingsCell, styles.standingsNumCol]}>{t.wins}</Text>
-                          <Text style={[styles.standingsCell, styles.standingsNumCol]}>{t.draws}</Text>
-                          <Text style={[styles.standingsCell, styles.standingsNumCol]}>{t.losses}</Text>
-                          <Text style={[styles.standingsCell, styles.standingsGoalCol]}>{t.goalsFor}-{t.goalsAgainst}</Text>
-                          <Text style={[styles.standingsCell, styles.standingsNumCol, { fontWeight: '700' }]}>{t.points}</Text>
-                        </View>
-                      );
-                    })}
-                  </View>
-                )}
-              </>
-            )}
-
-            {/* AI-analys */}
-            {!analysisModal.loading && (
-              <View style={styles.aiSection}>
-                {!aiAnalysis && !aiLoading && !aiError && (
-                  <TouchableOpacity
-                    style={styles.aiBtn}
-                    onPress={() => fetchAiAnalysis(analysisModal.eventHome, analysisModal.eventAway, analysisModal.league)}
-                  >
-                    <Text style={styles.aiBtnText}>🤖 AI-analys av matchen</Text>
-                  </TouchableOpacity>
-                )}
-                {aiLoading && <ActivityIndicator color="#6A1B9A" style={{ marginVertical: 12 }} />}
-                {aiError && (
-                  <View style={styles.aiErrorBox}>
-                    <Text style={styles.aiErrorText}>{aiError}</Text>
-                  </View>
-                )}
-                {aiAnalysis && (
-                  <View style={styles.aiResultBox}>
-                    <Text style={styles.aiResultLabel}>🤖 AI-analys</Text>
-                    <Text style={styles.aiResultText}>{aiAnalysis}</Text>
-                  </View>
-                )}
-              </View>
-            )}
-
-            <TouchableOpacity
-              style={styles.closeAnalysisBtn}
-              onPress={() => { setAnalysisModal(prev => ({ ...prev, visible: false })); setAiAnalysis(null); setAiError(null); }}
-            >
-              <Text style={styles.closeAnalysisBtnText}>Stäng</Text>
-            </TouchableOpacity>
-          </ScrollView>
-        </View>
-      </Modal>
+      {renderAnalysisModal()}
     </ScrollView>
   );
 }
@@ -1974,6 +1683,80 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 10,
     fontWeight: '700',
+  },
+  // Formdetaljer-popup
+  formModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  formModalCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    paddingHorizontal: 18,
+    paddingTop: 14,
+    paddingBottom: 12,
+    width: '100%',
+    maxWidth: 360,
+  },
+  formModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  formModalTitle: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#1B5E20',
+  },
+  formModalClose: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#F0F0F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  formModalCloseText: { fontSize: 15, color: '#666', fontWeight: '700' },
+  formModalSub: {
+    fontSize: 12,
+    color: '#999',
+    marginTop: 2,
+    marginBottom: 10,
+  },
+  formDetailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 7,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#EEE',
+  },
+  formDetailDate: {
+    width: 52,
+    fontSize: 12,
+    color: '#777',
+  },
+  formDetailHA: {
+    width: 20,
+    height: 20,
+    borderRadius: 5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 8,
+  },
+  formDetailHome: { backgroundColor: '#E3F2E5' },
+  formDetailAway: { backgroundColor: '#EDE7F6' },
+  formDetailHAText: { fontSize: 11, fontWeight: '800', color: '#444' },
+  formDetailOpp: { flex: 1, fontSize: 14, color: '#333' },
+  formDetailScore: { fontSize: 14, fontWeight: '700', color: '#222', marginHorizontal: 8, minWidth: 34, textAlign: 'center' },
+  formDetailBadge: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   analysisNoData: {
     fontSize: 13,
