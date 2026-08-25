@@ -10,6 +10,7 @@ import {
   Modal,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import { Ionicons } from '@expo/vector-icons';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
@@ -37,6 +38,8 @@ interface RoundGarderingEntry {
   namn: string;
   ratt: number | null;
   position: number | null;
+  advanced?: boolean;
+  champion?: boolean;
 }
 
 interface RoundData {
@@ -280,6 +283,15 @@ export default function TipsAllsvenskanScreen() {
                           ]}>
                             {entry.ratt !== null ? `${entry.ratt} rätt` : 'ej tippat'}
                           </Text>
+                          {entry.advanced && (
+                            <View style={styles.roundGardAdvance}>
+                              <Ionicons
+                                name={entry.champion ? 'trophy' : 'arrow-forward-circle'}
+                                size={18}
+                                color={entry.champion ? '#B8860B' : '#1B5E20'}
+                              />
+                            </View>
+                          )}
                         </TouchableOpacity>
                       );
                     })}
@@ -768,6 +780,10 @@ const styles = StyleSheet.create({
   roundGardRattLeader: {
     color: '#1B5E20',
     fontWeight: '800',
+  },
+  roundGardAdvance: {
+    marginLeft: 8,
+    justifyContent: 'center',
   },
   // Grundtipsen rows
   roundGrundRow: {

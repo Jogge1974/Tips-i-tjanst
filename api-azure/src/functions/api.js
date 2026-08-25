@@ -1882,6 +1882,7 @@ async function getRoundHistory() {
 
     const rounds = [];
     let roundNr = 1;
+    let slutspelSeen = 0;
 
     for (const eko of ekoRows) {
         const { spelomgang, isSlutspel } = eko;
@@ -1971,6 +1972,34 @@ async function getRoundHistory() {
                     garderingTable[i].position = pos;
                 }
                 pos = i + 2;
+            }
+        }
+
+        // Markera vilka som gick vidare i slutspelet (auktoritativt från TIT_newSlutspel)
+        if (isSlutspel === 1) {
+            slutspelSeen++;
+            const typ = slutspelSeen - 1; // 0=kvart, 1=semi, 2=final
+            const advanceCount = typ === 0 ? 4 : typ === 1 ? 2 : 1;
+            let advancingIds = new Set();
+            const [nsRows] = await db.query(
+                'SELECT id, resultat, sortpoang FROM TIT_newSlutspel WHERE sasong = ? AND typ = ?',
+                [sasong, typ]
+            );
+            if (nsRows.length) {
+                const ranked = [...nsRows].sort((a, b) =>
+                    (b.resultat !== a.resultat) ? b.resultat - a.resultat : (a.sortpoang ?? 0) - (b.sortpoang ?? 0)
+                );
+                advancingIds = new Set(ranked.slice(0, advanceCount).map(r => r.id));
+            } else {
+                // Fallback: topp N i enkelradstabellen
+                advancingIds = new Set(garderingTable.filter(e => e.ratt !== null).slice(0, advanceCount).map(e => e.userId));
+            }
+            for (const e of garderingTable) {
+                e.advanced = e.ratt !== null && advancingIds.has(e.userId);
+            }
+            // Sista fasen (final) => vinnaren
+            for (const e of garderingTable) {
+                e.champion = typ === 2 && e.advanced === true;
             }
         }
 
