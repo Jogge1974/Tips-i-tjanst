@@ -276,6 +276,16 @@ export default function TipsAllsvenskanScreen() {
                           <Text style={[styles.roundGardName, isLeader && styles.roundGardNameLeader]} numberOfLines={1}>
                             {entry.namn}
                           </Text>
+                          {entry.advanced && (
+                            <View style={styles.roundGardAdvance}>
+                              <Ionicons
+                                name={entry.champion ? 'trophy' : 'arrow-up-circle'}
+                                size={18}
+                                color={entry.champion ? '#B8860B' : '#1B5E20'}
+                                style={entry.champion ? undefined : { transform: [{ rotate: '-90deg' }] }}
+                              />
+                            </View>
+                          )}
                           <Text style={[
                             styles.roundGardRatt,
                             entry.ratt === null && styles.roundGardRattNull,
@@ -283,15 +293,6 @@ export default function TipsAllsvenskanScreen() {
                           ]}>
                             {entry.ratt !== null ? `${entry.ratt} rätt` : 'ej tippat'}
                           </Text>
-                          {entry.advanced && (
-                            <View style={styles.roundGardAdvance}>
-                              <Ionicons
-                                name={entry.champion ? 'trophy' : 'arrow-forward-circle'}
-                                size={18}
-                                color={entry.champion ? '#B8860B' : '#1B5E20'}
-                              />
-                            </View>
-                          )}
                         </TouchableOpacity>
                       );
                     })}
@@ -782,7 +783,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   roundGardAdvance: {
-    marginLeft: 8,
+    marginRight: 6,
     justifyContent: 'center',
   },
   // Grundtipsen rows
