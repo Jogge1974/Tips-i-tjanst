@@ -74,12 +74,22 @@ async function speletOppet(connection) {
 let messageSchemaEnsured = false;
 async function ensureMessageSchema(db) {
     if (messageSchemaEnsured) return;
-    const ignore = ['ER_DUP_FIELDNAME', 'ER_NO_SUCH_TABLE'];
+    const ignore = ['ER_DUP_FIELDNAME', 'ER_DUP_KEYNAME', 'ER_NO_SUCH_TABLE'];
     try {
         await db.query('ALTER TABLE TIT_admin ADD COLUMN message TEXT NULL');
     } catch (e) { if (!ignore.includes(e.code)) throw e; }
     try {
         await db.query('ALTER TABLE TIT_push_tokens ADD COLUMN notis_meddelande TINYINT(1) DEFAULT 1');
+    } catch (e) { if (!ignore.includes(e.code)) throw e; }
+    // Per-device identity: lets each installed device keep its own settings
+    try {
+        await db.query('ALTER TABLE TIT_push_tokens ADD COLUMN deviceId VARCHAR(255) NULL');
+    } catch (e) { if (!ignore.includes(e.code)) throw e; }
+    try {
+        await db.query('ALTER TABLE TIT_push_tokens ADD COLUMN deviceName VARCHAR(255) NULL');
+    } catch (e) { if (!ignore.includes(e.code)) throw e; }
+    try {
+        await db.query('ALTER TABLE TIT_push_tokens ADD UNIQUE KEY unique_user_device (userId, deviceId)');
     } catch (e) { if (!ignore.includes(e.code)) throw e; }
     messageSchemaEnsured = true;
 }
@@ -2149,7 +2159,7 @@ async function getSlutspel() {
 // ===== PUSH NOTIFICATIONS =====
 
 async function registerPushToken(params) {
-    const { userId, pushToken, platform } = params;
+    const { userId, pushToken, platform, deviceId, deviceName } = params;
     if (!userId || !pushToken) {
         return jsonResponse({ error: 'userId och pushToken krävs' }, 400);
     }
@@ -2160,13 +2170,16 @@ async function registerPushToken(params) {
         userId INT NOT NULL,
         pushToken VARCHAR(255) NOT NULL,
         platform VARCHAR(20) DEFAULT 'expo',
+        deviceId VARCHAR(255) NULL,
+        deviceName VARCHAR(255) NULL,
         notis_ny_kupong TINYINT(1) DEFAULT 1,
         notis_spelstopp TINYINT(1) DEFAULT 1,
         notis_live TINYINT(1) DEFAULT 1,
         notis_meddelande TINYINT(1) DEFAULT 1,
         createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
         updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        UNIQUE KEY unique_user_token (userId, pushToken)
+        UNIQUE KEY unique_user_token (userId, pushToken),
+        UNIQUE KEY unique_user_device (userId, deviceId)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
     await db.query(`CREATE TABLE IF NOT EXISTS TIT_push_log (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -2176,29 +2189,58 @@ async function registerPushToken(params) {
         sentAt DATETIME DEFAULT CURRENT_TIMESTAMP,
         UNIQUE KEY unique_notis (userId, notisType, spelomgang)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+    await ensureMessageSchema(db);
     // Remove this token from any other user (device changed owner)
     await db.query(
         'DELETE FROM TIT_push_tokens WHERE pushToken = ? AND userId != ?',
         [pushToken, userId]
     );
-    await db.query(
-        `INSERT INTO TIT_push_tokens (userId, pushToken, platform)
-         VALUES (?, ?, ?)
-         ON DUPLICATE KEY UPDATE pushToken = VALUES(pushToken), platform = VALUES(platform), updatedAt = NOW()`,
-        [userId, pushToken, platform || 'expo']
-    );
+    if (deviceId) {
+        // Upsert per device: same physical device keeps its row (and settings) even if
+        // the Expo token rotates, and a legacy token-row gets upgraded with the deviceId in place.
+        await db.query(
+            `INSERT INTO TIT_push_tokens (userId, pushToken, platform, deviceId, deviceName)
+             VALUES (?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE
+                pushToken = VALUES(pushToken),
+                platform = VALUES(platform),
+                deviceId = VALUES(deviceId),
+                deviceName = VALUES(deviceName),
+                updatedAt = NOW()`,
+            [userId, pushToken, platform || 'expo', deviceId, deviceName || null]
+        );
+    } else {
+        // Legacy clients without a deviceId: keep the old token-based upsert
+        await db.query(
+            `INSERT INTO TIT_push_tokens (userId, pushToken, platform)
+             VALUES (?, ?, ?)
+             ON DUPLICATE KEY UPDATE pushToken = VALUES(pushToken), platform = VALUES(platform), updatedAt = NOW()`,
+            [userId, pushToken, platform || 'expo']
+        );
+    }
     return jsonResponse({ success: true });
 }
 
 async function getPushSettings(params) {
-    const { userId } = params;
+    const { userId, deviceId } = params;
     if (!userId) return jsonResponse({ error: 'userId krävs' }, 400);
     const db = getPool();
     await ensureMessageSchema(db);
-    const [rows] = await db.query(
-        'SELECT notis_ny_kupong, notis_spelstopp, notis_live, notis_meddelande FROM TIT_push_tokens WHERE userId = ? LIMIT 1',
-        [userId]
-    );
+    const columns = 'notis_ny_kupong, notis_spelstopp, notis_live, notis_meddelande';
+    let rows = [];
+    if (deviceId) {
+        [rows] = await db.query(
+            `SELECT ${columns} FROM TIT_push_tokens WHERE userId = ? AND deviceId = ? LIMIT 1`,
+            [userId, deviceId]
+        );
+    }
+    if (!rows.length) {
+        // Fallback for legacy rows without a deviceId
+        [rows] = await db.query(
+            `SELECT ${columns} FROM TIT_push_tokens WHERE userId = ? LIMIT 1`,
+            [userId]
+        );
+    }
     if (!rows.length) {
         return jsonResponse({ notis_ny_kupong: 1, notis_spelstopp: 1, notis_live: 1, notis_meddelande: 1 });
     }
@@ -2206,16 +2248,28 @@ async function getPushSettings(params) {
 }
 
 async function updatePushSettings(params) {
-    const { userId, notis_ny_kupong, notis_spelstopp, notis_live, notis_meddelande } = params;
+    const { userId, deviceId, notis_ny_kupong, notis_spelstopp, notis_live, notis_meddelande } = params;
     if (!userId) return jsonResponse({ error: 'userId krävs' }, 400);
     const db = getPool();
     await ensureMessageSchema(db);
-    await db.query(
-        `UPDATE TIT_push_tokens 
-         SET notis_ny_kupong = ?, notis_spelstopp = ?, notis_live = ?, notis_meddelande = ?
-         WHERE userId = ?`,
-        [notis_ny_kupong ? 1 : 0, notis_spelstopp ? 1 : 0, notis_live ? 1 : 0, notis_meddelande ? 1 : 0, userId]
-    );
+    const values = [notis_ny_kupong ? 1 : 0, notis_spelstopp ? 1 : 0, notis_live ? 1 : 0, notis_meddelande ? 1 : 0];
+    if (deviceId) {
+        // Only affect the device the user is currently on
+        await db.query(
+            `UPDATE TIT_push_tokens 
+             SET notis_ny_kupong = ?, notis_spelstopp = ?, notis_live = ?, notis_meddelande = ?
+             WHERE userId = ? AND deviceId = ?`,
+            [...values, userId, deviceId]
+        );
+    } else {
+        // Legacy clients without a deviceId: update all of the user's rows
+        await db.query(
+            `UPDATE TIT_push_tokens 
+             SET notis_ny_kupong = ?, notis_spelstopp = ?, notis_live = ?, notis_meddelande = ?
+             WHERE userId = ?`,
+            [...values, userId]
+        );
+    }
     return jsonResponse({ success: true });
 }
 
@@ -2276,12 +2330,33 @@ async function sendExpoPush(tokens, title, body, data = {}) {
         chunks.push(messages.slice(i, i + 100));
     }
 
+    const invalidTokens = [];
     for (const chunk of chunks) {
-        await fetch('https://exp.host/--/api/v2/push/send', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(chunk),
-        });
+        try {
+            const resp = await fetch('https://exp.host/--/api/v2/push/send', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(chunk),
+            });
+            const result = await resp.json();
+            const tickets = Array.isArray(result?.data) ? result.data : [];
+            tickets.forEach((ticket, i) => {
+                if (ticket?.status === 'error' && ticket?.details?.error === 'DeviceNotRegistered') {
+                    invalidTokens.push(chunk[i].to);
+                }
+            });
+        } catch (e) {
+            // Network error towards Expo – skip, will retry on next run
+        }
+    }
+
+    // Remove tokens Expo reports as no longer valid (e.g. app uninstalled / reinstalled)
+    if (invalidTokens.length) {
+        try {
+            await getPool().query('DELETE FROM TIT_push_tokens WHERE pushToken IN (?)', [invalidTokens]);
+        } catch (e) {
+            // Ignore cleanup errors
+        }
     }
 }
 
@@ -2982,12 +3057,16 @@ app.http('api', {
                         userId INT NOT NULL,
                         pushToken VARCHAR(255) NOT NULL,
                         platform VARCHAR(20) DEFAULT 'expo',
+                        deviceId VARCHAR(255) NULL,
+                        deviceName VARCHAR(255) NULL,
                         notis_ny_kupong TINYINT(1) DEFAULT 1,
                         notis_spelstopp TINYINT(1) DEFAULT 1,
                         notis_live TINYINT(1) DEFAULT 1,
+                        notis_meddelande TINYINT(1) DEFAULT 1,
                         createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
                         updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                        UNIQUE KEY unique_user_token (userId, pushToken)
+                        UNIQUE KEY unique_user_token (userId, pushToken),
+                        UNIQUE KEY unique_user_device (userId, deviceId)
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
                     await db.query(`CREATE TABLE IF NOT EXISTS TIT_push_log (
                         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -2997,6 +3076,7 @@ app.http('api', {
                         sentAt DATETIME DEFAULT CURRENT_TIMESTAMP,
                         UNIQUE KEY unique_notis (userId, notisType, spelomgang)
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+                    await ensureMessageSchema(db);
                     return jsonResponse({ success: true, message: 'Push tables created' });
                 }
                 case 'getAdminData':
