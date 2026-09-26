@@ -2156,6 +2156,612 @@ async function getSlutspel() {
     return jsonResponse({ sasong, currentPhase, kvart, semi, final, winner });
 }
 
+// ===== KLUBBEN: EKONOMI / STATISTIK / CUP =====
+
+// Ekonomi-översikt: omgångar, banken, skuldläge och utdelningar
+async function getEkonomi(params) {
+    const db = getPool();
+
+    const [omgangar] = await db.query(
+        `SELECT spelomgang, sasong, isSlutspel,
+                IFNULL(insats, 0) AS insats, IFNULL(extraInsats, 0) AS extraInsats,
+                IFNULL(vinst, 0) AS vinst, IFNULL(extraVinst, 0) AS extraVinst,
+                IFNULL(vinst, 0) + IFNULL(extraVinst, 0) - IFNULL(insats, 0) - IFNULL(extraInsats, 0) AS tot
+         FROM TIT_ekonomi
+         ORDER BY spelomgang DESC`
+    );
+
+    const [bankRows] = await db.query(
+        `SELECT IFNULL(SUM(veckansKapital + vinst + extraVinst - insats - extraInsats - utdelning), 0) AS bank
+         FROM TIT_ekonomi`
+    );
+    const bank = Number(bankRows[0].bank) || 0;
+
+    // Skuldläge: inbetald avgift minus antal säsonger * 300 kr
+    const [skuldRows] = await db.query(
+        `SELECT t.id, t.efternamn,
+                IFNULL(a.avgift, 0) - (SELECT COUNT(DISTINCT sasong) FROM TIT_ekonomi) * 300 AS diff
+         FROM TIT_TipsTjanst t
+         LEFT JOIN (SELECT id, SUM(avgift) AS avgift FROM TIT_avgift GROUP BY id) a ON t.id = a.id
+         ORDER BY diff, t.efternamn`
+    );
+    // Historiska justeringar för id 11 och 12 (startskuld som inte ska visas)
+    const skuldlage = skuldRows.map(r => {
+        let diff = Number(r.diff) || 0;
+        if (r.id === 11) diff += 600;
+        else if (r.id === 12) diff += 1200;
+        return { efternamn: r.efternamn, diff };
+    });
+
+    const [utdelning] = await db.query(
+        `SELECT spelomgang, utdelning FROM TIT_ekonomi WHERE utdelning > 0 ORDER BY spelomgang DESC`
+    );
+
+    return jsonResponse({ omgangar, bank, skuldlage, utdelning });
+}
+
+// Statistik: säsongsstatistik, champions, charity shield och cupmästare
+async function getStatistik(params) {
+    const db = getPool();
+
+    const [sasong] = await db.query(
+        `SELECT sasong,
+                COUNT(*) AS antVeckor,
+                MAX(vinst + extraVinst - insats - extraInsats) AS maxVinst,
+                MIN(vinst + extraVinst - insats - extraInsats) AS minVinst,
+                SUM(insats + extraInsats) AS insats,
+                SUM(vinst + extraVinst) AS vinst,
+                SUM(vinst + extraVinst - insats - extraInsats) AS total,
+                SUM(vinst + extraVinst - insats - extraInsats) / 13 / COUNT(*) AS snittPerMedl
+         FROM TIT_ekonomi
+         GROUP BY sasong
+         ORDER BY sasong DESC`
+    );
+
+    const [champions] = await db.query(
+        `SELECT tipsAllsvenskan AS namn, COUNT(*) AS antal
+         FROM TIT_sasong
+         GROUP BY tipsAllsvenskan, tipsAllsvenskanEfternamn
+         ORDER BY COUNT(*) DESC`
+    );
+
+    const [charityShield] = await db.query(
+        `SELECT charityShield AS namn, COUNT(*) AS antal
+         FROM TIT_sasong
+         WHERE sasong >= 28
+         GROUP BY charityShield, charityShieldEfternamn
+         ORDER BY COUNT(*) DESC`
+    );
+
+    const [cupmastare] = await db.query(
+        `SELECT CONCAT(t.fornamn, ' ', t.efternamn) AS namn, COUNT(*) AS antal
+         FROM TIT_tipsextracupen c
+         JOIN TIT_TipsTjanst t ON c.id = t.id
+         WHERE c.cupfas = 0
+         GROUP BY t.fornamn, t.efternamn
+         ORDER BY COUNT(*) DESC`
+    );
+
+    // TipsAllsvenskan-mästerskap: vinnaren (högst poäng) per säsong i TIT_TipsAllsvenskan.
+    // Innevarande (senaste) säsong räknas endast om den spelats klart (12 omgångar).
+    const [taAllRows] = await db.query(
+        `SELECT a.sasong, CONCAT(u.fornamn, ' ', u.efternamn) AS namn, a.poang, a.spelade
+         FROM TIT_TipsAllsvenskan a
+         JOIN TIT_TipsTjanst u ON u.id = a.id`
+    );
+    const taSeasons = {};
+    for (const r of taAllRows) {
+        const s = r.sasong;
+        if (!taSeasons[s]) taSeasons[s] = { winner: null, maxPoang: -Infinity, maxSpelade: 0 };
+        const poang = Number(r.poang);
+        if (poang > taSeasons[s].maxPoang) { taSeasons[s].maxPoang = poang; taSeasons[s].winner = r.namn; }
+        const spelade = Number(r.spelade) || 0;
+        if (spelade > taSeasons[s].maxSpelade) taSeasons[s].maxSpelade = spelade;
+    }
+    const taSasongKeys = Object.keys(taSeasons).map(Number);
+    const latestSasong = taSasongKeys.length ? Math.max(...taSasongKeys) : null;
+    const taMap = {};
+    for (const s of taSasongKeys) {
+        const info = taSeasons[s];
+        if (s === latestSasong && info.maxSpelade < 12) continue; // innevarande säsong ej färdigspelad
+        if (info.winner) taMap[info.winner] = (taMap[info.winner] || 0) + 1;
+    }
+    const tipsAllsvenskan = Object.keys(taMap)
+        .map(namn => ({ namn, antal: taMap[namn] }))
+        .sort((a, b) => b.antal - a.antal || a.namn.localeCompare(b.namn));
+
+    return jsonResponse({ sasong, champions, charityShield, cupmastare, tipsAllsvenskan });
+}
+
+// Cupträd för en säsong (default senaste) + tillgängliga säsonger + cupvinnare
+async function getCup(params) {
+    const db = getPool();
+    await ensureCupSchema(db);
+
+    const [seasonRows] = await db.query(
+        `SELECT DISTINCT sasong FROM TIT_ekonomi WHERE sasong > 0 ORDER BY sasong DESC`
+    );
+    const seasons = seasonRows.map(r => r.sasong);
+
+    const requested = params.sasong ? parseInt(params.sasong) : null;
+    const sasong = requested && seasons.includes(requested) ? requested : (seasons[0] ?? null);
+
+    let bracket = [];
+    let matches = [];
+    let winner = null;
+    let aktiv = null;
+    let nasta = null;
+
+    if (sasong != null) {
+        const [rows] = await db.query(
+            `SELECT c.id, c.cupfas, c.sortorder, c.poang,
+                    CONCAT(t.fornamn, ' ', t.efternamn) AS namn
+             FROM TIT_tipsextracupen c
+             JOIN TIT_TipsTjanst t ON c.id = t.id
+             WHERE c.sasong = ?
+             ORDER BY c.cupfas DESC, c.sortorder`,
+            [sasong]
+        );
+        bracket = rows.map((r, i) => ({
+            position: i + 1, id: r.id, namn: r.namn, poang: r.poang, cupfas: r.cupfas,
+        }));
+
+        // Läs aktiv/nästa-slot
+        const [stateRows] = await db.query('SELECT * FROM TIT_cup_state WHERE sasong = ?', [sasong]);
+        const st = stateRows[0] || {};
+        if (st.aktivFas != null && st.aktivIdx != null) aktiv = { cupfas: st.aktivFas, matchIndex: st.aktivIdx };
+        if (st.nastaFas != null && st.nastaIdx != null) nasta = { cupfas: st.nastaFas, matchIndex: st.nastaIdx };
+
+        // Bygg fullt bracket (4 kvart, 2 semi, 1 final) med platshållare
+        const byFas = (fas) => rows.filter(r => r.cupfas === fas).sort((a, b) => a.sortorder - b.sortorder);
+        const kf = byFas(4), sf = byFas(2), fi = byFas(1);
+        const toP = (e) => e ? { id: e.id, namn: e.namn, poang: e.poang } : null;
+        const isAktiv = (fas, idx) => aktiv != null && aktiv.cupfas === fas && aktiv.matchIndex === idx;
+        const isNasta = (fas, idx) => nasta != null && nasta.cupfas === fas && nasta.matchIndex === idx;
+
+        for (let i = 0; i < 4; i++) {
+            matches.push({
+                cupfas: 4, matchIndex: i, title: `Kvartsfinal ${i + 1}`,
+                players: [toP(kf[i * 2]), toP(kf[i * 2 + 1])],
+                placeholders: ['', ''],
+                aktiv: isAktiv(4, i), nasta: isNasta(4, i),
+            });
+        }
+        const sfPlace = [
+            ['Vinnare kvartsfinal 1', 'Vinnare kvartsfinal 2'],
+            ['Vinnare kvartsfinal 3', 'Vinnare kvartsfinal 4'],
+        ];
+        for (let i = 0; i < 2; i++) {
+            matches.push({
+                cupfas: 2, matchIndex: i, title: `Semifinal ${i + 1}`,
+                players: [toP(sf[i * 2]), toP(sf[i * 2 + 1])],
+                placeholders: sfPlace[i],
+                aktiv: isAktiv(2, i), nasta: isNasta(2, i),
+            });
+        }
+        matches.push({
+            cupfas: 1, matchIndex: 0, title: 'Final',
+            players: [toP(fi[0]), toP(fi[1])],
+            placeholders: ['Vinnare semifinal 1', 'Vinnare semifinal 2'],
+            aktiv: isAktiv(1, 0), nasta: isNasta(1, 0),
+        });
+
+        const champ = rows.find(r => r.cupfas === 0);
+        winner = champ ? { id: champ.id, namn: champ.namn } : null;
+    }
+
+    const [historik] = await db.query(
+        `SELECT CONCAT(t.fornamn, ' ', t.efternamn) AS namn, COUNT(*) AS antal
+         FROM TIT_tipsextracupen c
+         JOIN TIT_TipsTjanst t ON c.id = t.id
+         WHERE c.cupfas = 0
+         GROUP BY t.fornamn, t.efternamn
+         ORDER BY COUNT(*) DESC, t.efternamn`
+    );
+
+    return jsonResponse({ sasong, seasons, bracket, matches, winner, aktiv, nasta, historik });
+}
+
+// Min sida: betalningar per säsong, skuld och egen tipshistorik
+async function getMinSida(params) {
+    const userId = parseInt(params.userId || params.get?.('userId'));
+    if (!userId) return jsonResponse({ error: 'userId krävs' }, 400);
+    const db = getPool();
+
+    const [betRows] = await db.query(
+        `SELECT s.sasong, SUM(IFNULL(a.avgift, 0)) AS avgift, MAX(a.datum) AS datum
+         FROM (SELECT DISTINCT sasong FROM TIT_ekonomi) s
+         LEFT JOIN (SELECT * FROM TIT_avgift WHERE id = ?) a ON s.sasong = a.sasong
+         GROUP BY s.sasong
+         ORDER BY s.sasong DESC`,
+        [userId]
+    );
+    const fmtDatum = (d) => {
+        if (d == null) return null;
+        if (d instanceof Date) {
+            const y = d.getFullYear();
+            const m = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            return `${y}-${m}-${day}`;
+        }
+        return String(d);
+    };
+    let harBetalt = 0;
+    let bordeHaBetalt = 0;
+    const betalningar = betRows.map(r => {
+        const avgift = Number(r.avgift) || 0;
+        harBetalt += avgift;
+        bordeHaBetalt += 300;
+        return { sasong: r.sasong, avgift, betald: avgift >= 300, datum: fmtDatum(r.datum) };
+    });
+    const skuld = harBetalt - bordeHaBetalt;
+
+    // Tipshistorik: användarens grundtips denna säsong mot facit
+    const [sasongRows] = await db.query('SELECT MAX(sasong) AS sasong FROM TIT_ekonomi');
+    const sasong = sasongRows.length ? sasongRows[0].sasong : null;
+    let tipshistorik = [];
+    if (sasong != null) {
+        const [tipsRows] = await db.query(
+            `SELECT l.spelomgang, l.matchNr, t.tecken, r.tecken AS facit
+             FROM TIT_lottning l
+             JOIN TIT_ekonomi e ON e.spelomgang = l.spelomgang
+             LEFT JOIN TIT_tipsrad t ON t.spelomgang = l.spelomgang AND t.matchNr = l.matchNr AND t.ansvarigId = l.ansvarigId
+             LEFT JOIN TIT_rattrad r ON r.spelomgang = l.spelomgang AND r.matchNr = l.matchNr
+             WHERE l.ansvarigId = ? AND e.sasong = ?
+             ORDER BY l.spelomgang DESC`,
+            [userId, sasong]
+        );
+        tipshistorik = tipsRows.map(r => ({
+            spelomgang: r.spelomgang,
+            matchNr: r.matchNr,
+            tecken: r.tecken,
+            facit: r.facit,
+            correct: r.facit != null && r.tecken != null ? r.tecken === r.facit : null,
+        }));
+    }
+
+    // Personlig statistik: egna grundtips mot facit, uppdelat i år + totalt.
+    // Träffprocenten räknas ENDAST på tips utan STMF.
+    const [gtRows] = await db.query(
+        `SELECT LEFT(t.spelomgang, 4) AS ar, t.tecken, t.poangGrund, r.tecken AS facit
+         FROM TIT_tipsrad t
+         LEFT JOIN TIT_rattrad r ON r.spelomgang = t.spelomgang AND r.matchNr = t.matchNr
+         WHERE t.ansvarigId = ?`,
+        [userId]
+    );
+    const [arRows] = await db.query('SELECT LEFT(MAX(spelomgang), 4) AS ar FROM TIT_tipsrad');
+    const currentAr = (arRows[0] && arRows[0].ar) || '';
+
+    const newAgg = () => ({ tippade: 0, ratt: 0, fel: 0, stmf: 0, rattNs: 0, avgjordaNs: 0 });
+    const addToAgg = (agg, row) => {
+        const tippat = row.tecken != null && row.tecken !== '';
+        const decided = row.facit != null;
+        const correct = decided && row.tecken === row.facit;
+        const wrong = decided && tippat && row.tecken !== row.facit;
+        const isStmf = Number(row.poangGrund) === 1;
+        if (tippat) agg.tippade++;
+        if (correct) agg.ratt++;
+        if (wrong) agg.fel++;
+        if (isStmf) agg.stmf++;
+        if (!isStmf && decided && tippat) { agg.avgjordaNs++; if (correct) agg.rattNs++; }
+    };
+    const totalAgg = newAgg();
+    const iarAgg = newAgg();
+    for (const row of gtRows) {
+        addToAgg(totalAgg, row);
+        if (row.ar === currentAr) addToAgg(iarAgg, row);
+    }
+    const finalize = (agg) => ({
+        tippade: agg.tippade,
+        ratt: agg.ratt,
+        fel: agg.fel,
+        stmf: agg.stmf,
+        traffProcent: agg.avgjordaNs > 0 ? Math.round((agg.rattNs / agg.avgjordaNs) * 100) : 0,
+    });
+    const statistik = {
+        ar: currentAr || null,
+        iAr: finalize(iarAgg),
+        total: finalize(totalAgg),
+    };
+
+    // Favorittecken + träffsäkerhet per tecken (alla säsonger)
+    const [teckenRows] = await db.query(
+        `SELECT t.tecken,
+                COUNT(*) AS antal,
+                COUNT(CASE WHEN r.tecken IS NOT NULL AND t.tecken = r.tecken THEN 1 END) AS ratt
+         FROM TIT_tipsrad t
+         LEFT JOIN TIT_rattrad r ON r.spelomgang = t.spelomgang AND r.matchNr = t.matchNr
+         WHERE t.ansvarigId = ? AND t.tecken IN ('1','X','2')
+         GROUP BY t.tecken`,
+        [userId]
+    );
+    const perTecken = { '1': { antal: 0, ratt: 0 }, 'X': { antal: 0, ratt: 0 }, '2': { antal: 0, ratt: 0 } };
+    for (const row of teckenRows) {
+        if (perTecken[row.tecken]) perTecken[row.tecken] = { antal: Number(row.antal), ratt: Number(row.ratt) };
+    }
+    let favorittecken = null;
+    let favMax = -1;
+    for (const tkn of ['1', 'X', '2']) {
+        if (perTecken[tkn].antal > favMax) { favMax = perTecken[tkn].antal; favorittecken = tkn; }
+    }
+    if (favMax <= 0) favorittecken = null;
+
+    // Längsta streak av rätt grundtips (kronologiskt)
+    const [seqRows] = await db.query(
+        `SELECT (r.tecken IS NOT NULL AND t.tecken = r.tecken) AS correct
+         FROM TIT_tipsrad t
+         JOIN TIT_rattrad r ON r.spelomgang = t.spelomgang AND r.matchNr = t.matchNr
+         WHERE t.ansvarigId = ? AND t.tecken <> ''
+         ORDER BY t.spelomgang, t.matchNr`,
+        [userId]
+    );
+    let bastaStreak = 0, nuvarandeStreak = 0;
+    for (const row of seqRows) {
+        if (Number(row.correct) === 1) { nuvarandeStreak++; if (nuvarandeStreak > bastaStreak) bastaStreak = nuvarandeStreak; }
+        else nuvarandeStreak = 0;
+    }
+
+    // Placering bland medlemmar – träffsäkerhet (exkl. STMF) + STMF, i år + totalt
+    const [rankRows] = await db.query(
+        `SELECT t.ansvarigId AS id, LEFT(t.spelomgang, 4) AS ar, t.tecken, t.poangGrund, r.tecken AS facit
+         FROM TIT_tipsrad t
+         LEFT JOIN TIT_rattrad r ON r.spelomgang = t.spelomgang AND r.matchNr = t.matchNr
+         WHERE t.ansvarigId > 0`
+    );
+    const memberAgg = {};
+    const ensureM = (id) => {
+        if (!memberAgg[id]) memberAgg[id] = {
+            iAr: { rattNs: 0, avgjordaNs: 0, stmf: 0 },
+            total: { rattNs: 0, avgjordaNs: 0, stmf: 0 },
+        };
+        return memberAgg[id];
+    };
+    for (const r of rankRows) {
+        const tippat = r.tecken != null && r.tecken !== '';
+        const decided = r.facit != null;
+        const isStmf = Number(r.poangGrund) === 1;
+        const correct = decided && r.tecken === r.facit;
+        const m = ensureM(r.id);
+        const apply = (b) => {
+            if (isStmf) b.stmf++;
+            else if (decided && tippat) { b.avgjordaNs++; if (correct) b.rattNs++; }
+        };
+        apply(m.total);
+        if (r.ar === currentAr) apply(m.iAr);
+    }
+    const ids = Object.keys(memberAgg).map(Number);
+    const antalMedlemmar = ids.length;
+    const traffOf = (b) => (b.avgjordaNs > 0 ? b.rattNs / b.avgjordaNs : 0);
+    const placering = (sortKey) => {
+        const sorted = [...ids].sort((a, b) => sortKey(memberAgg[b]) - sortKey(memberAgg[a]));
+        const idx = sorted.indexOf(userId);
+        return idx >= 0 ? idx + 1 : null;
+    };
+    const rank = {
+        antalMedlemmar,
+        traffPlatsIAr: placering(m => traffOf(m.iAr)),
+        traffPlatsTotal: placering(m => traffOf(m.total)),
+        stmfPlatsIAr: placering(m => -m.iAr.stmf),
+        stmfPlatsTotal: placering(m => -m.total.stmf),
+    };
+
+    return jsonResponse({
+        betalningar, harBetalt, bordeHaBetalt, skuld, tipshistorik, statistik,
+        perTecken, favorittecken, bastaStreak, rank,
+    });
+}
+
+// Topplista: träffprocent (exkl. STMF) för hela gruppen, i år + totalt
+async function getTopplista(params) {
+    const db = getPool();
+    const [rows] = await db.query(
+        `SELECT t.ansvarigId AS id, LEFT(t.spelomgang, 4) AS ar, t.tecken, t.poangGrund, r.tecken AS facit
+         FROM TIT_tipsrad t
+         LEFT JOIN TIT_rattrad r ON r.spelomgang = t.spelomgang AND r.matchNr = t.matchNr
+         WHERE t.ansvarigId > 0`
+    );
+    const [namnRows] = await db.query(
+        `SELECT id, CONCAT(fornamn, ' ', efternamn) AS namn FROM TIT_TipsTjanst`
+    );
+    const namnMap = {};
+    for (const n of namnRows) namnMap[n.id] = n.namn;
+
+    let currentAr = '';
+    for (const r of rows) { if (r.ar && r.ar > currentAr) currentAr = r.ar; }
+
+    const per = {};
+    const ensure = (id) => {
+        if (!per[id]) per[id] = { iAr: { ratt: 0, avgjorda: 0 }, total: { ratt: 0, avgjorda: 0 } };
+        return per[id];
+    };
+    for (const r of rows) {
+        const tippat = r.tecken != null && r.tecken !== '';
+        const decided = r.facit != null;
+        const isStmf = Number(r.poangGrund) === 1;
+        if (isStmf || !decided || !tippat) continue;
+        const correct = r.tecken === r.facit;
+        const p = ensure(r.id);
+        p.total.avgjorda++; if (correct) p.total.ratt++;
+        if (r.ar === currentAr) { p.iAr.avgjorda++; if (correct) p.iAr.ratt++; }
+    }
+    const pct = (b) => (b.avgjorda > 0 ? Math.round((b.ratt / b.avgjorda) * 100) : 0);
+    const lista = Object.keys(per).map(id => {
+        const p = per[id];
+        return {
+            id: Number(id),
+            namn: namnMap[id] || `#${id}`,
+            iAr: { traffProcent: pct(p.iAr), ratt: p.iAr.ratt, avgjorda: p.iAr.avgjorda },
+            total: { traffProcent: pct(p.total), ratt: p.total.ratt, avgjorda: p.total.avgjorda },
+        };
+    });
+
+    return jsonResponse({ ar: currentAr || null, lista });
+}
+
+// ===== CUP ADMIN =====
+
+let cupSchemaEnsured = false;
+async function ensureCupSchema(db) {
+    if (cupSchemaEnsured) return;
+    const ignore = ['ER_DUP_FIELDNAME', 'ER_NO_SUCH_TABLE'];
+    try {
+        await db.query('ALTER TABLE TIT_tipsextracupen ADD COLUMN aktiv TINYINT(1) DEFAULT 0');
+    } catch (e) { if (!ignore.includes(e.code)) throw e; }
+    // Slot för "veckans" (aktiv) och "nästa" cupmatch per säsong
+    await db.query(`CREATE TABLE IF NOT EXISTS TIT_cup_state (
+        sasong INT NOT NULL PRIMARY KEY,
+        aktivFas INT NULL,
+        aktivIdx INT NULL,
+        nastaFas INT NULL,
+        nastaIdx INT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+    cupSchemaEnsured = true;
+}
+
+function requireAdmin(params) {
+    const userId = parseInt(params.userId || params.get?.('userId'));
+    return userId === 1;
+}
+
+async function currentCupSasong(db) {
+    const [rows] = await db.query('SELECT MAX(sasong) AS sasong FROM TIT_ekonomi');
+    return rows.length ? rows[0].sasong : null;
+}
+
+// Initiera cupen för aktuell säsong: seedar 8 kvartsfinalister från
+// föregående säsongs TipsAllsvenskan (topp 8), med parning [1,5,7,3,4,8,6,2].
+async function cupInit(params) {
+    if (!requireAdmin(params)) return jsonResponse({ error: 'Ej behörig' }, 403);
+    const db = getPool();
+    await ensureCupSchema(db);
+    const sasong = await currentCupSasong(db);
+    if (sasong == null) return jsonResponse({ error: 'Ingen säsong' }, 400);
+
+    const [top8] = await db.query(
+        `SELECT a.id
+         FROM TIT_TipsAllsvenskan a
+         WHERE a.sasong = ? - 1
+         ORDER BY a.poang DESC
+         LIMIT 8`,
+        [sasong]
+    );
+    if (top8.length < 8) {
+        return jsonResponse({ error: 'Föregående säsongs TipsAllsvenskan saknar 8 spelare' }, 400);
+    }
+
+    const placering = [1, 5, 7, 3, 4, 8, 6, 2];
+    await db.query('DELETE FROM TIT_tipsextracupen WHERE sasong = ?', [sasong]);
+    for (let i = 0; i < 8; i++) {
+        const sortorder = placering[i];
+        await db.query(
+            `INSERT INTO TIT_tipsextracupen (sasong, cupfas, sortorder, semisort, id, poang, aktiv)
+             VALUES (?, 4, ?, ?, ?, 0, 0)`,
+            [sasong, sortorder, sortorder, top8[i].id]
+        );
+    }
+    return getCup({ sasong: String(sasong) });
+}
+
+// Spara poäng för spelare i cupträdet
+async function cupSavePoang(params) {
+    if (!requireAdmin(params)) return jsonResponse({ error: 'Ej behörig' }, 403);
+    const db = getPool();
+    await ensureCupSchema(db);
+    const sasong = await currentCupSasong(db);
+    if (sasong == null) return jsonResponse({ error: 'Ingen säsong' }, 400);
+
+    const poang = Array.isArray(params.poang) ? params.poang : [];
+    for (const p of poang) {
+        await db.query(
+            'UPDATE TIT_tipsextracupen SET poang = ? WHERE sasong = ? AND cupfas = ? AND id = ?',
+            [Number(p.poang) || 0, sasong, p.cupfas, p.id]
+        );
+    }
+    return getCup({ sasong: String(sasong) });
+}
+
+// Avancera cupen till nästa fas: vinnare (högst poäng per match) går vidare.
+async function cupAdvance(params) {
+    if (!requireAdmin(params)) return jsonResponse({ error: 'Ej behörig' }, 403);
+    const db = getPool();
+    await ensureCupSchema(db);
+    const sasong = await currentCupSasong(db);
+    if (sasong == null) return jsonResponse({ error: 'Ingen säsong' }, 400);
+
+    const phaseHas = async (fas) => {
+        const [r] = await db.query(
+            'SELECT COUNT(*) AS c FROM TIT_tipsextracupen WHERE sasong = ? AND cupfas = ?',
+            [sasong, fas]
+        );
+        return r[0].c > 0;
+    };
+
+    // Bestäm källfas att avancera från (lägsta fas vars nästa fas ännu är tom)
+    let fromFas, toFas, startSort;
+    if (await phaseHas(4) && !(await phaseHas(2))) { fromFas = 4; toFas = 2; startSort = 9; }
+    else if (await phaseHas(2) && !(await phaseHas(1))) { fromFas = 2; toFas = 1; startSort = 13; }
+    else if (await phaseHas(1) && !(await phaseHas(0))) { fromFas = 1; toFas = 0; startSort = 15; }
+    else return jsonResponse({ error: 'Inget att avancera – cupen är klar eller ej initierad' }, 400);
+
+    const [rows] = await db.query(
+        'SELECT id, sortorder, poang FROM TIT_tipsextracupen WHERE sasong = ? AND cupfas = ? ORDER BY sortorder',
+        [sasong, fromFas]
+    );
+
+    // Para ihop 2 och 2 i sortorder-ordning; vinnare = högst poäng (oavgjort → förste)
+    let sort = startSort;
+    for (let i = 0; i + 1 < rows.length; i += 2) {
+        const a = rows[i];
+        const b = rows[i + 1];
+        const winner = Number(a.poang) >= Number(b.poang) ? a : b;
+        await db.query(
+            `INSERT INTO TIT_tipsextracupen (sasong, cupfas, sortorder, semisort, id, poang, aktiv)
+             VALUES (?, ?, ?, ?, ?, 0, 0)`,
+            [sasong, toFas, sort, sort, winner.id]
+        );
+        sort++;
+    }
+    return getCup({ sasong: String(sasong) });
+}
+
+// Markera "veckans cupmatch" (aktiv). cupfas + matchIndex, eller null för att rensa.
+async function cupSetAktiv(params) {
+    if (!requireAdmin(params)) return jsonResponse({ error: 'Ej behörig' }, 403);
+    const db = getPool();
+    await ensureCupSchema(db);
+    const sasong = await currentCupSasong(db);
+    if (sasong == null) return jsonResponse({ error: 'Ingen säsong' }, 400);
+
+    const cupfas = params.cupfas != null && params.cupfas !== '' ? parseInt(params.cupfas) : null;
+    const matchIndex = params.matchIndex != null && params.matchIndex !== '' ? parseInt(params.matchIndex) : null;
+
+    await db.query(
+        `INSERT INTO TIT_cup_state (sasong, aktivFas, aktivIdx) VALUES (?, ?, ?)
+         ON DUPLICATE KEY UPDATE aktivFas = VALUES(aktivFas), aktivIdx = VALUES(aktivIdx)`,
+        [sasong, cupfas, matchIndex]
+    );
+    return getCup({ sasong: String(sasong) });
+}
+
+// Markera "nästa veckas cupmatch". cupfas + matchIndex, eller null för att rensa.
+async function cupSetNasta(params) {
+    if (!requireAdmin(params)) return jsonResponse({ error: 'Ej behörig' }, 403);
+    const db = getPool();
+    await ensureCupSchema(db);
+    const sasong = await currentCupSasong(db);
+    if (sasong == null) return jsonResponse({ error: 'Ingen säsong' }, 400);
+
+    const cupfas = params.cupfas != null && params.cupfas !== '' ? parseInt(params.cupfas) : null;
+    const matchIndex = params.matchIndex != null && params.matchIndex !== '' ? parseInt(params.matchIndex) : null;
+
+    await db.query(
+        `INSERT INTO TIT_cup_state (sasong, nastaFas, nastaIdx) VALUES (?, ?, ?)
+         ON DUPLICATE KEY UPDATE nastaFas = VALUES(nastaFas), nastaIdx = VALUES(nastaIdx)`,
+        [sasong, cupfas, matchIndex]
+    );
+    return getCup({ sasong: String(sasong) });
+}
+
 // ===== PUSH NOTIFICATIONS =====
 
 async function registerPushToken(params) {
@@ -3091,6 +3697,26 @@ app.http('api', {
                     return await saveEkonomi(params);
                 case 'generateSystem':
                     return await generateSystem(params);
+                case 'getEkonomi':
+                    return await getEkonomi(params);
+                case 'getStatistik':
+                    return await getStatistik(params);
+                case 'getCup':
+                    return await getCup(params);
+                case 'getMinSida':
+                    return await getMinSida(params);
+                case 'getTopplista':
+                    return await getTopplista(params);
+                case 'cupInit':
+                    return await cupInit(params);
+                case 'cupSavePoang':
+                    return await cupSavePoang(params);
+                case 'cupAdvance':
+                    return await cupAdvance(params);
+                case 'cupSetAktiv':
+                    return await cupSetAktiv(params);
+                case 'cupSetNasta':
+                    return await cupSetNasta(params);
                 default:
                     return jsonResponse({ error: `Okänd action: ${action}` }, 400);
             }

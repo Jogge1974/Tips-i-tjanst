@@ -67,6 +67,123 @@ export interface SlutspelData {
   winner?: { id: number | null; namn: string } | null;
 }
 
+export interface EkonomiOmgang {
+  spelomgang: string;
+  sasong: number;
+  isSlutspel: number;
+  insats: number;
+  extraInsats: number;
+  vinst: number;
+  extraVinst: number;
+  tot: number;
+}
+
+export interface EkonomiData {
+  omgangar: EkonomiOmgang[];
+  bank: number;
+  skuldlage: { efternamn: string; diff: number }[];
+  utdelning: { spelomgang: string; utdelning: number }[];
+}
+
+export interface StatistikSasong {
+  sasong: number;
+  antVeckor: number;
+  maxVinst: number;
+  minVinst: number;
+  insats: number;
+  vinst: number;
+  total: number;
+  snittPerMedl: number;
+}
+
+export interface StatistikData {
+  sasong: StatistikSasong[];
+  champions: { namn: string; antal: number }[];
+  charityShield: { namn: string; antal: number }[];
+  cupmastare: { namn: string; antal: number }[];
+  tipsAllsvenskan: { namn: string; antal: number }[];
+}
+
+export interface CupMatchPlayer {
+  id: number;
+  namn: string;
+  poang: number;
+}
+
+export interface CupMatch {
+  cupfas: number;
+  matchIndex: number;
+  title: string;
+  players: (CupMatchPlayer | null)[];
+  placeholders: string[];
+  aktiv: boolean;
+  nasta: boolean;
+}
+
+export interface CupSlot {
+  cupfas: number;
+  matchIndex: number;
+}
+
+export interface CupData {
+  sasong: number | null;
+  seasons: number[];
+  bracket: { position: number; id: number; namn: string; poang: number; cupfas: number }[];
+  matches: CupMatch[];
+  winner: { id: number; namn: string } | null;
+  aktiv: CupSlot | null;
+  nasta: CupSlot | null;
+  historik: { namn: string; antal: number }[];
+}
+
+export interface MinSidaBetalning {
+  sasong: number;
+  avgift: number;
+  betald: boolean;
+  datum: string | null;
+}
+
+export interface MinSidaData {
+  betalningar: MinSidaBetalning[];
+  harBetalt: number;
+  bordeHaBetalt: number;
+  skuld: number;
+  tipshistorik: {
+    spelomgang: string;
+    matchNr: number;
+    tecken: string | null;
+    facit: string | null;
+    correct: boolean | null;
+  }[];
+  statistik: {
+    ar: string | null;
+    iAr: { tippade: number; ratt: number; fel: number; stmf: number; traffProcent: number };
+    total: { tippade: number; ratt: number; fel: number; stmf: number; traffProcent: number };
+  };
+  perTecken: Record<'1' | 'X' | '2', { antal: number; ratt: number }>;
+  favorittecken: '1' | 'X' | '2' | null;
+  bastaStreak: number;
+  rank: {
+    antalMedlemmar: number;
+    traffPlatsIAr: number | null;
+    traffPlatsTotal: number | null;
+    stmfPlatsIAr: number | null;
+    stmfPlatsTotal: number | null;
+  };
+}
+
+export interface TopplistaRad {
+  id: number;
+  namn: string;
+  iAr: { traffProcent: number; ratt: number; avgjorda: number };
+  total: { traffProcent: number; ratt: number; avgjorda: number };
+}
+
+export interface TopplistaData {
+  ar: string | null;
+  lista: TopplistaRad[];
+}
+
 export const api = {
   async getUsers(): Promise<User[]> {
     const response = await fetch(`${API_BASE_URL}?action=getUsers`);
@@ -268,4 +385,88 @@ export const api = {
     if (!response.ok) throw new Error('Kunde inte hämta analys');
     return response.json();
   },
+
+  async getEkonomi(): Promise<EkonomiData> {
+    const response = await fetch(`${API_BASE_URL}?action=getEkonomi`);
+    if (!response.ok) throw new Error('Kunde inte hämta ekonomi');
+    return response.json();
+  },
+
+  async getStatistik(): Promise<StatistikData> {
+    const response = await fetch(`${API_BASE_URL}?action=getStatistik`);
+    if (!response.ok) throw new Error('Kunde inte hämta statistik');
+    return response.json();
+  },
+
+  async getCup(sasong?: number): Promise<CupData> {
+    const url = sasong
+      ? `${API_BASE_URL}?action=getCup&sasong=${sasong}`
+      : `${API_BASE_URL}?action=getCup`;
+    const response = await fetch(url);
+    if (!response.ok) throw new Error('Kunde inte hämta cup');
+    return response.json();
+  },
+
+  async getMinSida(userId: number): Promise<MinSidaData> {
+    const response = await fetch(`${API_BASE_URL}?action=getMinSida&userId=${userId}`);
+    if (!response.ok) throw new Error('Kunde inte hämta min sida');
+    return response.json();
+  },
+
+  async getTopplista(): Promise<TopplistaData> {
+    const response = await fetch(`${API_BASE_URL}?action=getTopplista`);
+    if (!response.ok) throw new Error('Kunde inte hämta topplista');
+    return response.json();
+  },
+
+  async cupInit(userId: number): Promise<CupData> {
+    const response = await fetch(`${API_BASE_URL}?action=cupInit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId }),
+    });
+    if (!response.ok) throw new Error('Kunde inte initiera cupen');
+    return response.json();
+  },
+
+  async cupSavePoang(userId: number, poang: { id: number; cupfas: number; poang: number }[]): Promise<CupData> {
+    const response = await fetch(`${API_BASE_URL}?action=cupSavePoang`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, poang }),
+    });
+    if (!response.ok) throw new Error('Kunde inte spara poäng');
+    return response.json();
+  },
+
+  async cupAdvance(userId: number): Promise<CupData> {
+    const response = await fetch(`${API_BASE_URL}?action=cupAdvance`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId }),
+    });
+    if (!response.ok) throw new Error('Kunde inte avancera cupen');
+    return response.json();
+  },
+
+  async cupSetAktiv(userId: number, cupfas: number | null, matchIndex: number | null): Promise<CupData> {
+    const response = await fetch(`${API_BASE_URL}?action=cupSetAktiv`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, cupfas, matchIndex }),
+    });
+    if (!response.ok) throw new Error('Kunde inte markera veckans cupmatch');
+    return response.json();
+  },
+
+  async cupSetNasta(userId: number, cupfas: number | null, matchIndex: number | null): Promise<CupData> {
+    const response = await fetch(`${API_BASE_URL}?action=cupSetNasta`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, cupfas, matchIndex }),
+    });
+    if (!response.ok) throw new Error('Kunde inte markera nästa cupmatch');
+    return response.json();
+  },
 };
+

@@ -16,6 +16,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../context/AuthContext';
 import { api, GameStatus, MatchInfo, Gardering } from '../services/api';
+import MinSidaFooter from './MinSidaFooter';
 
 const API_BASE_URL = 'https://tipsitjanst-api.azurewebsites.net/api/api';
 
@@ -400,14 +401,16 @@ export default function MinSidaScreen() {
       <View style={{ flex: 1, backgroundColor: '#F5F5F5' }}>
         <ScrollView
           style={styles.container}
+          contentContainerStyle={{ paddingBottom: 40 }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         >
-          {/* Background content - visible behind overlay */}
+          {/* Background content */}
           <View style={styles.closedBackground}>
             <Text style={styles.closedOmgang}>Omgång {status?.spelomgang || ''}</Text>
 
             {myMatch && (
-              <View style={styles.closedMatchCard}>
+              <View style={styles.closedMatchWrap}>
+                <View style={styles.closedMatchCard}>
                 <Text style={styles.closedMatchLabel}>Din match</Text>
                 <Text style={styles.closedMatchLiga}>{myMatch.liga}</Text>
                 <TouchableOpacity onPress={() => openAnalysis(myMatch)}>
@@ -437,6 +440,12 @@ export default function MinSidaScreen() {
                 {!postedTecken && (
                   <Text style={styles.closedNoTecken}>Inget tips registrerat</Text>
                 )}
+                </View>
+                <View style={styles.matchLockOverlay}>
+                  <Text style={styles.matchLockIcon}>🔒</Text>
+                  <Text style={styles.matchLockTitle}>Spelet är stängt</Text>
+                  <Text style={styles.matchLockText}>Vänta tills nästa kupong publiceras</Text>
+                </View>
               </View>
             )}
 
@@ -447,24 +456,10 @@ export default function MinSidaScreen() {
                 <Text style={styles.closedResultValue}>{status.antalRatt} rätt</Text>
               </View>
             )}
-
-            <View style={styles.closedInfoCard}>
-              <Text style={styles.closedInfoIcon}>💡</Text>
-              <Text style={styles.closedInfoText}>
-                Ny omgång öppnar måndag. Följ matchen live under LIVE-fliken!
-              </Text>
-            </View>
           </View>
+
+          {user && <MinSidaFooter userId={Number(user.id)} />}
         </ScrollView>
-
-        {/* Lock overlay */}
-        <View style={styles.lockOverlay}>
-          <View style={styles.lockCard}>
-            <Text style={styles.closedIcon}>🔒</Text>
-            <Text style={styles.closedTitle}>Spelet är stängt</Text>
-            <Text style={styles.closedText}>Vänta tills nästa kupong publiceras</Text>
-          </View>
-        </View>
 
         {renderAnalysisModal()}
       </View>
@@ -559,6 +554,8 @@ export default function MinSidaScreen() {
           </Text>
         </TouchableOpacity>
 
+        {user && <MinSidaFooter userId={Number(user.id)} />}
+
         {renderAnalysisModal()}
       </ScrollView>
     );
@@ -629,6 +626,8 @@ export default function MinSidaScreen() {
             <Text style={styles.noMatchText}>Ingen match tilldelad denna omgång.</Text>
           </View>
         )}
+
+        {user && <MinSidaFooter userId={Number(user.id)} />}
 
         {renderAnalysisModal()}
 
@@ -772,6 +771,8 @@ export default function MinSidaScreen() {
           {status.isSlutspel === 1 ? 'Spara enkelrad' : 'Spara garderingar'}
         </Text>
       </TouchableOpacity>
+
+      {user && <MinSidaFooter userId={Number(user.id)} />}
 
       {renderAnalysisModal()}
     </ScrollView>
@@ -1338,8 +1339,21 @@ const styles = StyleSheet.create({
   },
   closedBackground: {
     paddingTop: 8,
-    opacity: 0.4,
   },
+  closedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ECEFF1',
+    borderRadius: 12,
+    padding: 14,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#CFD8DC',
+  },
+  closedBannerIcon: { fontSize: 22, marginRight: 12 },
+  closedBannerTitle: { fontSize: 15, fontWeight: '700', color: '#455A64' },
+  closedBannerText: { fontSize: 12, color: '#78909C', marginTop: 2 },
   closedOmgang: {
     fontSize: 14,
     fontWeight: '600',
@@ -1359,6 +1373,22 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
     elevation: 3,
   },
+  closedMatchWrap: { position: 'relative' },
+  matchLockOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 16,
+    backgroundColor: 'rgba(236,239,241,0.94)',
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+  },
+  matchLockIcon: { fontSize: 34 },
+  matchLockTitle: { fontSize: 18, fontWeight: '800', color: '#455A64', marginTop: 6 },
+  matchLockText: { fontSize: 13, color: '#78909C', marginTop: 2, textAlign: 'center' },
   closedMatchLabel: {
     fontSize: 12,
     fontWeight: '600',
@@ -1476,7 +1506,11 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   lockOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     backgroundColor: 'rgba(0,0,0,0.35)',
     justifyContent: 'center',
     alignItems: 'center',

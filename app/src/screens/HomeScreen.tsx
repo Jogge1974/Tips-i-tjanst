@@ -12,7 +12,7 @@ import {
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
-import { api, SlutspelData } from '../services/api';
+import { api, SlutspelData, CupMatch } from '../services/api';
 
 interface DashboardData {
   status: { speletOppet: number; spelomgang: string; isSlutspel: number; antalRatt: number };
@@ -67,11 +67,18 @@ function getCountdown(speletOppet: number, isSlutspel: number): string {
   return `${hours}h ${minutes}min`;
 }
 
+function cupMatchNames(m: CupMatch): string {
+  const label = (i: number) => (m.players[i] ? m.players[i]!.namn : m.placeholders[i] || '?');
+  return `${label(0)} – ${label(1)}`;
+}
+
 export default function HomeScreen() {
   const { user } = useAuth();
   const navigation = useNavigation<any>();
   const [data, setData] = useState<DashboardData | null>(null);
   const [slutspel, setSlutspel] = useState<SlutspelData | null>(null);
+  const [cupAktiv, setCupAktiv] = useState<CupMatch | null>(null);
+  const [cupNasta, setCupNasta] = useState<CupMatch | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -87,6 +94,11 @@ export default function HomeScreen() {
       } else {
         setSlutspel(null);
       }
+      try {
+        const cup = await api.getCup();
+        setCupAktiv(cup.matches.find((m) => m.aktiv) || null);
+        setCupNasta(cup.matches.find((m) => m.nasta) || null);
+      } catch { /* ignore cup fetch errors */ }
     } catch (e) {
       console.error('Dashboard fetch error:', e);
     } finally {
@@ -397,6 +409,30 @@ export default function HomeScreen() {
         </View>
       )}
 
+      {/* Veckans cupmatch */}
+      {cupAktiv && (
+        <TouchableOpacity style={[styles.cupCard, styles.cupCardAktiv]} onPress={() => navigation.navigate('Cup')} activeOpacity={0.8}>
+          <Text style={styles.cupCardIcon}>🔴</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.cupCardTitle}>Veckans cupmatch · {cupAktiv.title}</Text>
+            <Text style={styles.cupCardNames}>{cupMatchNames(cupAktiv)}</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={22} color="#C62828" />
+        </TouchableOpacity>
+      )}
+
+      {/* Nästa veckas cupmatch */}
+      {cupNasta && (
+        <TouchableOpacity style={[styles.cupCard, styles.cupCardNasta]} onPress={() => navigation.navigate('Cup')} activeOpacity={0.8}>
+          <Text style={styles.cupCardIcon}>🟠</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.cupCardTitle, { color: '#EF6C00' }]}>Nästa veckas cupmatch · {cupNasta.title}</Text>
+            <Text style={styles.cupCardNames}>{cupMatchNames(cupNasta)}</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={22} color="#EF6C00" />
+        </TouchableOpacity>
+      )}
+
       {/* Slutspel bracket (endast slutspelsomgångar) */}
       {renderSlutspelCard()}
 
@@ -561,6 +597,26 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
     elevation: 3,
   },
+  cupCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFF8E1',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#FFD54F',
+    padding: 16,
+    marginBottom: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  cupCardAktiv: { backgroundColor: '#FFEBEE', borderColor: '#EF9A9A' },
+  cupCardNasta: { backgroundColor: '#FFF3E0', borderColor: '#FFCC80' },
+  cupCardIcon: { fontSize: 24, marginRight: 12 },
+  cupCardTitle: { fontSize: 13, fontWeight: '700', color: '#C62828' },
+  cupCardNames: { fontSize: 16, fontWeight: '700', color: '#333', marginTop: 2 },
   messageHeader: {
     flexDirection: 'row',
     alignItems: 'center',

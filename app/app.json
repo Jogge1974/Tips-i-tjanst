@@ -6,11 +6,6 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "splash": {
-      "image": "./assets/logga_transparent.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#F5F5F5"
-    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "se.liveidrott.tipsitjanst",
@@ -26,8 +21,7 @@
         "backgroundColor": "#1B5E20"
       },
       "package": "se.liveidrott.tipsitjanst",
-      "versionCode": 9,
-      "usesCleartextTraffic": true
+      "versionCode": 9
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -46,6 +40,17 @@
           "image": "./assets/logga_transparent.png",
           "resizeMode": "contain",
           "backgroundColor": "#F5F5F5"
+        }
+      ],
+      "expo-sharing",
+      "expo-status-bar",
+      "expo-font",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
         }
       ]
     ],
