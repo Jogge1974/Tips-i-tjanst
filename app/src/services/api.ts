@@ -295,7 +295,7 @@ export const api = {
     return response.json();
   },
 
-  async getLiveGarderingTable(): Promise<{ isSlutspel: number; table: { userId: number; namn: string; ratt: number | null; position: number | null }[] }> {
+  async getLiveGarderingTable(): Promise<{ isSlutspel: number; spelomgang: string; table: { userId: number; namn: string; ratt: number | null; position: number | null }[] }> {
     const response = await fetch(`${API_BASE_URL}?action=getLiveGarderingTable`);
     if (!response.ok) throw new Error('Kunde inte hämta garderingstabell');
     return response.json();

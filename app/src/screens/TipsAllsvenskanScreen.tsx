@@ -20,6 +20,8 @@ interface StandingEntry {
   namn: string;
   spelade: number;
   sakra: number;
+  odds: number;
+  gard: number;
   poang: number;
 }
 

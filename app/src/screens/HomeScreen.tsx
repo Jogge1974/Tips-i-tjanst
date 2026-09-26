@@ -642,8 +642,6 @@ const styles = StyleSheet.create({
     borderTopWidth: 3,
     borderTopColor: '#2E7D32',
     marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#F0E3C0',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.08,

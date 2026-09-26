@@ -134,6 +134,14 @@ export default function AdminScreen() {
     }
   }, [user]);
 
+  const loadOmgangStatus = useCallback(async () => {
+    try {
+      const resp = await fetch(`${API_BASE_URL}?action=getOmgangStatus`);
+      const json = await resp.json();
+      if (json.status) setOmgangStatus(json.status);
+    } catch { }
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
       loadData();
@@ -179,14 +187,6 @@ export default function AdminScreen() {
     if (!ekonomi) return;
     setEkonomi({ ...ekonomi, [field]: value });
   };
-
-  const loadOmgangStatus = useCallback(async () => {
-    try {
-      const resp = await fetch(`${API_BASE_URL}?action=getOmgangStatus`);
-      const json = await resp.json();
-      if (json.status) setOmgangStatus(json.status);
-    } catch { }
-  }, []);
 
   const handleAvslutaOmgang = async () => {
     setOmgangLoading(true);
